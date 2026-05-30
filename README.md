@@ -173,7 +173,7 @@ q2 테스트의 결과처럼 낮은 절감률로 측정됩니다.
 인프라 실행:
 
 ```powershell
-cd CCIM\v2
+cd CCIM
 docker compose up -d redis postgres
 ```
 
