@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# uv
+.uv-cache/
+
+# Environments
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / runtime
+*.log
+data/
+postgres-data/
+redis-data/
+tools/log/
+*.db
+*.sqlite
+*.sqlite3
+
+# claude
+.claude/
+.codex/
+
+# Local helpers
+scripts/*.local.ps1
+
+# Compare run outputs
+tools/compare/workspace/*
+!tools/compare/workspace/.gitkeep

@@ -1,0 +1,52 @@
+services:
+  redis:
+    image: redis/redis-stack:7.4.0-v1
+    container_name: ccim-redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"  # RedisInsight
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: ccim-postgres
+    environment:
+      POSTGRES_USER: ccim
+      POSTGRES_PASSWORD: ccim
+      POSTGRES_DB: ccim
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ccim"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build: .
+    container_name: ccim-gateway
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CCIM_REDIS_URL: redis://redis:6379/0
+      CCIM_DATABASE_URL: postgresql+asyncpg://ccim:ccim@postgres:5432/ccim
+    ports:
+      - "8081:8081"
+    profiles: ["full"]  # 기본은 인프라만, 게이트웨이는 `--profile full`로
+
+volumes:
+  redis-data:
+  postgres-data:
