@@ -1,4 +1,4 @@
-"""S(system) > D(developer) > U(user) > R(retrieved/RAG) 4-compartment data structures.
+"""S(system) > D(developer) > U(user) > R(retrieved) 4-compartment data structures.
 
 PCFI core thesis: a higher compartment's instructions cannot be overridden by a lower one.
 Any role-switch attempt from below is treated as injection.
@@ -7,10 +7,10 @@ V1 classification rules:
   - S: `system` field + role=system messages
   - D: `tools` definitions (treated as developer instructions)
   - U: regular user/assistant messages
-  - R: messages explicitly tagged by caller via `rag_messages`
+  - R: messages explicitly tagged by caller via `retrieved_messages`
 
 Anthropic Messages API has no 'developer' role, so D is populated from tool defs.
-RAG auto-detection (e.g. metadata.source="retrieval") is deferred to V2.
+Retrieved-content auto-detection (e.g. metadata.source="retrieval") is deferred.
 """
 
 from __future__ import annotations
@@ -70,12 +70,12 @@ class Compartments:
         system: str | list[ContentBlock] | None = None,
         messages: Iterable[Message] | None = None,
         tools: Iterable[Any] | None = None,
-        rag_messages: Iterable[Message] | None = None,
-    ) -> "Compartments":
+        retrieved_messages: Iterable[Message] | None = None,
+    ) -> Compartments:
         s_msgs: list[Message] = []
         d_msgs: list[Message] = []
         u_msgs: list[Message] = []
-        r_msgs: list[Message] = list(rag_messages) if rag_messages else []
+        r_msgs: list[Message] = list(retrieved_messages) if retrieved_messages else []
 
         if system is not None:
             s_msgs.append(Message(role="system", content=system))

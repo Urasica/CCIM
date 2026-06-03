@@ -52,6 +52,7 @@ tools/log/
 
 # Local helpers
 scripts/*.local.ps1
+DEV_PLAN.md
 
 # Compare run outputs
 tools/compare/workspace/*

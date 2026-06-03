@@ -8,6 +8,26 @@ CCIM은 이런 반복 컨텍스트를 압축하고, 원본은 Redis에 보관하
 
 **CCIM는 코딩 에이전트의 긴 작업에서 반복 컨텍스트 비용을 줄이면서 의미 손실과 write 리스크를 관측 가능한 방식으로 관리하는 미들웨어**입니다.
 
+## 지원 범위
+
+CCIM는 LLM API gateway로 개발합니다. Anthropic Messages 호환 요청을 받아 압축, 복원, write guard, telemetry를 적용한 뒤 upstream LLM으로 전달하는 구조입니다.
+
+지원하는 범위:
+
+- Anthropic Messages 호환 `/v1/messages`, `/v1/models`
+- Anthropic, OpenAI, OpenAI-compatible upstream
+- Redis 기반 원문 저장과 `retrieve_original` 복원
+- PostgreSQL과 Admin UI 기반 요청별 telemetry
+- 현재 턴 `Read` 결과 압축과 write guard
+
+지원하지 않는 범위:
+
+- Codex/Claude 구독제용 MCP 도구
+- MCP tool/resource/prompt 기반 압축 workflow
+- host가 파일을 읽은 뒤 사후 압축하는 방식
+
+이 방향의 결정 이유와 개발 계획은 `DEV_PLAN.md`에 정리되어 있습니다.
+
 ## 왜 필요한가
 
 코딩 에이전트는 작업 중 다음 흐름을 자주 반복합니다.
@@ -280,6 +300,7 @@ uv run python tools/compare/direct_test.py --session direct-check
 | `tools/admin_ui/` | Admin UI 정적 파일과 측정 UI |
 | `tools/compare/` | benchmark, measure, task fixture, semantic checker |
 | `img/compare.png` | q1/q2 비교 이미지 |
+| `DEV_PLAN.md` | MCP화 폐기 결정, API gateway 집중 사유, v2 보완 계획 |
 
 ## 트레이드오프
 
