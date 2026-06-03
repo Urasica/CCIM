@@ -448,6 +448,7 @@ function compressDetail(flags) {
   return [
     `cand=${flags.compress_candidates || 0}`,
     `msg=${flags.compress_candidate_messages || 0}`,
+    `hist=${flags.compress_history_contexts || 0}`,
     `ct=${flags.compress_current_turn_contexts || 0}`,
     `ast=${flags.compress_ast_blocks || 0}`,
     `ref=${flags.compress_tool_result_refs || 0}`,
@@ -475,6 +476,8 @@ function currentTurnDetail(flags) {
     "compress_current_turn_compressible_tool_results",
     "compress_current_turn_candidates",
     "compress_current_turn_excluded",
+    "compress_current_turn_source_path_results",
+    "compress_current_turn_missing_source_paths",
     "compress_current_turn_raw_lines_max",
     "compress_current_turn_raw_chars_max",
   ];
@@ -490,6 +493,8 @@ function currentTurnDetail(flags) {
   if (flags.compress_current_turn_candidates) parts.push(`ct_cand=${flags.compress_current_turn_candidates}`);
   if (flags.compress_current_turn_rejected_tool_results) parts.push(`ct_rej=${flags.compress_current_turn_rejected_tool_results}`);
   if (flags.compress_current_turn_excluded) parts.push(`ct_excl=${flags.compress_current_turn_excluded}`);
+  if (flags.compress_current_turn_source_path_results) parts.push(`ct_paths=${flags.compress_current_turn_source_path_results}`);
+  if (flags.compress_current_turn_missing_source_paths) parts.push(`ct_missing_paths=${flags.compress_current_turn_missing_source_paths}`);
   if (flags.compress_current_turn_raw_lines_max) parts.push(`ct_raw_lines=${flags.compress_current_turn_raw_lines_max}`);
   if (flags.compress_current_turn_raw_chars_max) parts.push(`ct_raw_chars=${flags.compress_current_turn_raw_chars_max}`);
   const matched = flags.compress_current_turn_matched_tool_names || [];
@@ -528,6 +533,8 @@ function guardDetail(flags) {
     flags.current_turn_write_guard_block_reason ? `reason=${flags.current_turn_write_guard_block_reason}` : "",
     flags.current_turn_write_guard_required_contexts ? `need=${flags.current_turn_write_guard_required_contexts}` : "",
     flags.current_turn_write_guard_retrieved_contexts ? `got=${flags.current_turn_write_guard_retrieved_contexts}` : "",
+    flags.current_turn_write_guard_validated_contexts ? `valid=${flags.current_turn_write_guard_validated_contexts}` : "",
+    flags.current_turn_write_guard_unknown_source_contexts ? `unknown_src=${flags.current_turn_write_guard_unknown_source_contexts}` : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" ") : "-";
 }
@@ -539,6 +546,7 @@ function metadataDetail(flags) {
   const ranges = flags.compress_context_original_ranges || [];
   const langs = flags.compress_tool_result_detected_languages || [];
   if (paths.length) parts.push(`paths=${paths.slice(0, 3).join(",")}${paths.length > 3 ? ",..." : ""}`);
+  if (flags.compress_current_turn_missing_source_paths) parts.push(`missing_paths=${flags.compress_current_turn_missing_source_paths}`);
   if (symbols.length) parts.push(`symbols=${symbols.slice(0, 5).join(",")}${symbols.length > 5 ? ",..." : ""}`);
   if (ranges.length) parts.push(`lines=${ranges.slice(0, 3).join(",")}${ranges.length > 3 ? ",..." : ""}`);
   if (langs.length) parts.push(`lang=${langs.join(",")}`);

@@ -319,6 +319,39 @@ async def test_compress_records_text_failure_reason() -> None:
     assert sentinel.called
 
 
+async def test_compress_records_history_context_counts() -> None:
+    code = (
+        "```python\n"
+        "def old_large_func():\n"
+        + "".join(f"    value_{i} = {i}\n" for i in range(80))
+        + "    return value_1\n"
+        "```\n"
+    )
+    mw = _make_compress_mw(threshold=1)
+    sentinel = _NoOpMiddleware()
+    chain = MiddlewareChain(stages=[mw, sentinel])
+    ctx = RequestContext(
+        session_id="s-history",
+        request=MessagesRequest(
+            model="claude-sonnet-4-6",
+            messages=[
+                Message(role="user", content=code),
+                Message(role="user", content="current request"),
+            ],
+        ),
+    )
+
+    await chain.run(ctx)
+
+    flags = ctx.extras["feature_flags"]
+    assert flags["compress_candidate_messages"] == 1
+    assert flags["compress_history_candidate_messages"] == 1
+    assert flags["compress_history_contexts"] >= 1
+    assert flags["compress_current_turn_contexts"] == 0
+    assert flags["compress_ast_blocks"] >= 1
+    assert sentinel.called
+
+
 async def test_compress_summarizes_structured_tool_output_without_retrieve_tool() -> None:
     from ccim.reversibility.store import ReversibilityStore
 
@@ -495,6 +528,8 @@ async def test_compress_current_turn_read_tool_result_when_enabled() -> None:
     assert flags["compress_skip_reason"] is None
     assert flags["compress_current_turn_candidates"] == 1
     assert flags["compress_current_turn_contexts"] >= 1
+    assert flags["compress_history_contexts"] == 0
+    assert flags["compress_history_candidate_messages"] == 0
     assert flags["compress_current_turn_tool_results"] == 1
     assert flags["compress_current_turn_allowed_tool_results"] == 1
     assert flags["compress_current_turn_rejected_tool_results"] == 0
@@ -756,6 +791,64 @@ async def test_compress_current_turn_tracks_source_per_tool_result() -> None:
     assert sentinel.called
 
 
+async def test_compress_current_turn_records_missing_source_path() -> None:
+    from ccim.reversibility.store import ReversibilityStore
+
+    code = (
+        "def large_unknown():\n"
+        + "".join(f"    value_{i} = {i}\n" for i in range(80))
+        + "    return value_1\n"
+    )
+    store = ReversibilityStore(_FakeRedis())
+    mw = _make_compress_mw(store=store, threshold=1, current_turn=True)
+    sentinel = _NoOpMiddleware()
+    chain = MiddlewareChain(stages=[mw, sentinel])
+    ctx = RequestContext(
+        session_id="s-current-missing-source",
+        request=MessagesRequest(
+            model="claude-sonnet-4-6",
+            messages=[
+                Message(role="user", content="read this file"),
+                Message(
+                    role="assistant",
+                    content=[
+                        ToolUseBlock(
+                            id="tool-read-unknown",
+                            name="Read",
+                            input={},
+                        ),
+                    ],
+                ),
+                Message(
+                    role="user",
+                    content=[
+                        ToolResultBlock(
+                            tool_use_id="tool-read-unknown",
+                            content=code,
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    )
+
+    await chain.run(ctx)
+
+    flags = ctx.extras["feature_flags"]
+    assert flags["compress_current_turn_source_path_results"] == 0
+    assert flags["compress_current_turn_missing_source_paths"] == 1
+    assert flags["compress_current_turn_missing_source_path_tool_results"] == [
+        "tool-read-unknown"
+    ]
+    assert ctx.extras["current_turn_context_ids"]
+    assert ctx.extras["current_turn_source_paths"] == set()
+    assert ctx.extras["current_turn_context_sources"] == {}
+    assert ctx.extras["current_turn_context_source_missing_ids"] == (
+        ctx.extras["current_turn_context_ids"]
+    )
+    assert sentinel.called
+
+
 async def test_current_turn_compressed_context_can_be_retrieved() -> None:
     from ccim.reversibility.interceptor import ReversibilityInterceptor
     from ccim.reversibility.store import ReversibilityStore
@@ -928,6 +1021,84 @@ async def test_current_turn_write_guard_allows_edit_after_retrieve() -> None:
     assert sentinel.called
 
 
+async def test_current_turn_write_guard_allows_multiedit_after_retrieve() -> None:
+    class _Settings:
+        compression_write_guard_enabled = True
+        compression_write_guard_tools = "Edit,MultiEdit,Write"
+
+    ctx = RequestContext(
+        session_id="s-current",
+        request=MessagesRequest(
+            model="claude-sonnet-4-6",
+            messages=[
+                Message(
+                    role="assistant",
+                    content=[
+                        ToolUseBlock(
+                            id="retrieve-1",
+                            name="retrieve_original",
+                            input={"context_id": "s-current:001"},
+                        )
+                    ],
+                ),
+                Message(
+                    role="user",
+                    content=[
+                        ToolResultBlock(
+                            tool_use_id="retrieve-1",
+                            content=(
+                                "def f():\n"
+                                "    value = 1\n"
+                                "    total = value + 1\n"
+                                "    return total\n"
+                            ),
+                        )
+                    ],
+                ),
+            ],
+        ),
+    )
+    ctx.extras["current_turn_context_ids"] = ["s-current:001"]
+    ctx.extras["current_turn_source_paths"] = {"large.py"}
+    ctx.extras["current_turn_context_sources"] = {"s-current:001": "large.py"}
+    ctx.response_json = {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "edit-1",
+                "name": "MultiEdit",
+                "input": {
+                    "file_path": "large.py",
+                    "edits": [
+                        {
+                            "old_string": "    value = 1",
+                            "new_string": "    value = 2",
+                        },
+                        {
+                            "old_string": "    return total",
+                            "new_string": "    return total + 1",
+                        },
+                    ],
+                },
+            }
+        ]
+    }
+    sentinel = _NoOpMiddleware()
+    await MiddlewareChain(
+        stages=[CurrentTurnWriteGuardMiddleware(settings=_Settings()), sentinel]
+    ).run(ctx)
+
+    assert ctx.response_json["content"][0]["type"] == "tool_use"
+    flags = ctx.extras["feature_flags"]
+    assert flags["current_turn_write_guard_blocked"] is False
+    assert flags["current_turn_write_guard_mode"] == "allowed_after_retrieve"
+    assert flags["current_turn_write_guard_allow_tool"] == "MultiEdit"
+    assert flags["current_turn_write_guard_retrieved_contexts"] == 1
+    assert flags["current_turn_write_guard_required_contexts"] == 1
+    assert flags["current_turn_write_guard_validated_context_ids"] == ["s-current:001"]
+    assert sentinel.called
+
+
 async def test_current_turn_write_guard_blocks_edit_when_old_string_missing() -> None:
     class _Settings:
         compression_write_guard_enabled = True
@@ -1049,6 +1220,47 @@ async def test_current_turn_write_guard_blocks_source_write_until_all_contexts_r
     assert flags["current_turn_write_guard_block_reason"] == "blocked_incomplete_retrieve"
     assert flags["current_turn_write_guard_retrieved_contexts"] == 1
     assert flags["current_turn_write_guard_required_contexts"] == 2
+    assert sentinel.called
+
+
+async def test_current_turn_write_guard_blocks_ambiguous_multicontext_edit() -> None:
+    class _Settings:
+        compression_write_guard_enabled = True
+        compression_write_guard_tools = "Edit,MultiEdit,Write"
+
+    ctx = _make_ctx()
+    ctx.extras["current_turn_context_ids"] = ["s-current:001", "s-current:002"]
+    ctx.extras["retrieved_contexts"] = {
+        "s-current:001": "def f():\n    value = 1\n    return value\n",
+    }
+    ctx.response_json = {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "edit-1",
+                "name": "Edit",
+                "input": {
+                    "file_path": "large.py",
+                    "old_string": "    value = 1",
+                    "new_string": "    value = 2",
+                },
+            },
+        ]
+    }
+    sentinel = _NoOpMiddleware()
+    await MiddlewareChain(
+        stages=[CurrentTurnWriteGuardMiddleware(settings=_Settings()), sentinel]
+    ).run(ctx)
+
+    assert ctx.response_json["content"][0]["type"] == "text"
+    flags = ctx.extras["feature_flags"]
+    assert flags["current_turn_write_guard_blocked"] is True
+    assert flags["current_turn_write_guard_block_reason"] == (
+        "blocked_target_context_unknown"
+    )
+    assert flags["current_turn_write_guard_required_contexts"] == 2
+    assert flags["current_turn_write_guard_unknown_source_contexts"] == 2
+    assert flags["current_turn_write_guard_validated_contexts"] == 0
     assert sentinel.called
 
 

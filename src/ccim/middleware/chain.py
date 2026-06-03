@@ -253,6 +253,8 @@ class CompressMiddleware:
             "compress_structured_summaries": 0,
             "compress_tool_result_refs": 0,
             "compress_tool_result_stores": 0,
+            "compress_history_contexts": 0,
+            "compress_history_candidate_messages": 0,
             "compress_current_turn_candidates": 0,
             "compress_current_turn_contexts": 0,
             "compress_current_turn_allowed_tools": self._settings.current_turn_compression_read_tools,
@@ -265,6 +267,9 @@ class CompressMiddleware:
             "compress_current_turn_matched_tool_names": [],
             "compress_current_turn_rejected_tool_names": [],
             "compress_current_turn_source_paths": [],
+            "compress_current_turn_source_path_results": 0,
+            "compress_current_turn_missing_source_paths": 0,
+            "compress_current_turn_missing_source_path_tool_results": [],
             "compress_tool_result_attempts": 0,
             "compress_tool_result_ast_successes": 0,
             "compress_tool_result_failures": 0,
@@ -393,6 +398,9 @@ class CompressMiddleware:
                             known_paths
                         )
                     compress_stats["compress_current_turn_contexts"] += len(ctx_ids)
+                else:
+                    compress_stats["compress_history_candidate_messages"] += 1
+                    compress_stats["compress_history_contexts"] += len(ctx_ids)
 
         # retrieve_original 도구 주입 (압축이 실제로 일어난 경우 + 플래그 활성화 시만)
         # compression_enable_retrieve=False (기본값): 토큰 절감만, LLM 추가 라운드트립 없음
@@ -573,10 +581,12 @@ class CompressMiddleware:
         allowed_tools = _csv_names(self._settings.current_turn_compression_read_tools)
         matched_names: set[str] = set()
         rejected_names: set[str] = set()
+        missing_source_path_tool_results: set[str] = set()
         total = 0
         allowed = 0
         rejected = 0
         compressible = 0
+        source_path_results = 0
         max_chars = 0
         max_lines = 0
 
@@ -593,6 +603,12 @@ class CompressMiddleware:
                     allowed += 1
                     if tool_name:
                         matched_names.add(tool_name)
+                    if _tool_input_path(
+                        self._tool_use_input_for(messages, block.tool_use_id)
+                    ):
+                        source_path_results += 1
+                    else:
+                        missing_source_path_tool_results.add(block.tool_use_id)
                 else:
                     rejected += 1
                     rejected_names.add(tool_name or "<missing_tool_use>")
@@ -611,6 +627,13 @@ class CompressMiddleware:
         stats["compress_current_turn_raw_lines_max"] = max_lines
         stats["compress_current_turn_matched_tool_names"] = sorted(matched_names)
         stats["compress_current_turn_rejected_tool_names"] = sorted(rejected_names)
+        stats["compress_current_turn_source_path_results"] = source_path_results
+        stats["compress_current_turn_missing_source_paths"] = len(
+            missing_source_path_tool_results
+        )
+        stats["compress_current_turn_missing_source_path_tool_results"] = sorted(
+            missing_source_path_tool_results
+        )
 
     def _allowed_current_turn_tool_result_ids(
         self, messages: list[Message], msg: Message
@@ -668,19 +691,31 @@ class CompressMiddleware:
         *,
         context_sources_by_id: dict[str, str] | None = None,
     ) -> None:
-        if not source_paths:
-            return
+        mapped_context_ids: set[str] = set()
         path_set = ctx.extras.setdefault("current_turn_source_paths", set())
-        if isinstance(path_set, set):
+        if source_paths and isinstance(path_set, set):
             path_set.update(source_paths)
         sources = ctx.extras.setdefault("current_turn_context_sources", {})
         if isinstance(sources, dict) and context_sources_by_id:
             sources.update(context_sources_by_id)
-            return
-        if isinstance(sources, dict) and len(source_paths) == 1:
+            mapped_context_ids.update(context_sources_by_id)
+        elif isinstance(sources, dict) and len(source_paths) == 1:
             source_path = next(iter(source_paths))
             for context_id in context_ids:
                 sources[context_id] = source_path
+                mapped_context_ids.add(context_id)
+
+        missing_context_ids = sorted(
+            context_id for context_id in context_ids if context_id not in mapped_context_ids
+        )
+        if missing_context_ids:
+            missing = ctx.extras.setdefault(
+                "current_turn_context_source_missing_ids", []
+            )
+            if isinstance(missing, list):
+                for context_id in missing_context_ids:
+                    if context_id not in missing:
+                        missing.append(context_id)
 
     @staticmethod
     def _tool_use_name_for(messages: list[Message], tool_use_id: str) -> str:
@@ -1299,6 +1334,18 @@ class CurrentTurnWriteGuardMiddleware:
         flags = ctx.extras.setdefault("feature_flags", {})
         if target_context_ids:
             flags["current_turn_write_guard_required_contexts"] = len(target_context_ids)
+        elif (
+            target_path
+            and len(current_ctx_ids) > 1
+            and self._source_mapping_incomplete(ctx)
+        ):
+            flags["current_turn_write_guard_required_contexts"] = len(current_ctx_ids)
+            flags["current_turn_write_guard_unknown_source_contexts"] = len(
+                self._unknown_source_context_ids(ctx)
+            )
+            flags["current_turn_write_guard_retrieved_contexts"] = 0
+            flags["current_turn_write_guard_validated_contexts"] = 0
+            return False, "blocked_target_context_unknown"
         flags["current_turn_write_guard_retrieved_contexts"] = len(retrieved_current)
         if not retrieved_current:
             return False, "blocked_no_retrieve"
@@ -1349,6 +1396,8 @@ class CurrentTurnWriteGuardMiddleware:
         if not target_path:
             return False
         source_paths = self._current_turn_source_paths(ctx)
+        if self._unknown_source_context_ids(ctx):
+            return False
         if not source_paths:
             return False
         return target_path not in source_paths
@@ -1378,6 +1427,23 @@ class CurrentTurnWriteGuardMiddleware:
             and isinstance(source_path, str)
             and _normalize_tool_path(source_path) == target_path
         }
+
+    @staticmethod
+    def _unknown_source_context_ids(ctx: RequestContext) -> set[str]:
+        raw_context_ids = ctx.extras.get("current_turn_context_ids") or []
+        if not isinstance(raw_context_ids, list):
+            return set()
+        sources = ctx.extras.get("current_turn_context_sources") or {}
+        if not isinstance(sources, dict):
+            return {item for item in raw_context_ids if isinstance(item, str)}
+        return {
+            context_id
+            for context_id in raw_context_ids
+            if isinstance(context_id, str) and context_id not in sources
+        }
+
+    def _source_mapping_incomplete(self, ctx: RequestContext) -> bool:
+        return bool(self._unknown_source_context_ids(ctx))
 
     def _context_ids_for_guard_message(
         self, ctx: RequestContext, target_path: str | None

@@ -275,6 +275,8 @@ Read,Grep,Glob,LS,Search
 
 현재 실험에서는 `Read` 중심으로 검증했다. `PowerShell`, `Bash`, `Write` 같은 결과는 rejected 진단에 남고 current-turn 압축 후보가 되지 않는다.
 
+current-turn 압축은 가능한 경우 직전 `tool_use` input의 `file_path` 또는 `path`를 source path로 기록한다. 이 mapping은 write guard가 `src/a.py` 수정과 `src/b.py` context를 구분하는 데 사용한다. source path를 찾지 못한 allowed ToolResult는 `compress_current_turn_missing_source_paths`와 `compress_current_turn_missing_source_path_tool_results`에 남긴다. 압축에는 성공했지만 context와 source path를 연결하지 못한 경우 `ctx.extras["current_turn_context_source_missing_ids"]`에도 기록한다.
+
 ## 6. Redis 저장 구조
 
 `src/ccim/reversibility/store.py`
@@ -352,9 +354,23 @@ CCIM_COMPRESSION_WRITE_GUARD_TOOLS=Edit,MultiEdit,Write
 | `Write` | 대상 source path 관련 current-turn context가 모두 retrieve됨 |
 | unrelated write | target path가 current-turn source path와 무관하면 허용 |
 
+차단 사유:
+
+| reason | 의미 | 대응 |
+|---|---|---|
+| `blocked_no_retrieve` | 관련 current-turn context가 아직 retrieve되지 않음 | 안내된 context id를 `retrieve_original`로 복원한 뒤 재시도 |
+| `blocked_old_string_missing` | retrieve된 원문 안에 `old_string`이 없음 | 원문을 확인해 정확한 기존 문자열로 다시 수정 |
+| `blocked_incomplete_retrieve` | `Write` 대상 파일의 current-turn context 중 일부만 retrieve됨 | 대상 파일 관련 context를 모두 복원 |
+| `blocked_source_write_unknown_context` | `Write` 대상 path와 연결된 context를 알 수 없음 | source path 추적을 확인하거나 원문을 명시 복원 |
+| `blocked_target_context_unknown` | 여러 current-turn context가 있는데 target path와 context mapping이 불완전함 | target 파일의 원문 context를 확인한 뒤 재시도 |
+| `missing_old_string` | `Edit` 입력에 `old_string`이 없거나 비어 있음 | `old_string`을 포함해 재시도 |
+| `missing_edits` | `MultiEdit` 입력에 edits가 없거나 비어 있음 | edits를 포함해 재시도 |
+| `invalid_edit` | `MultiEdit`의 개별 edit 형식이 잘못됨 | edit 객체 형식을 수정 |
+| `unsupported_write_tool` | guard 대상에 포함됐지만 정책이 없는 tool | guard 설정 또는 tool 정책을 확인 |
+
 차단은 transport-level 4xx가 아니다. Claude CLI가 retryable request failure로 오해하지 않도록 200 assistant text로 반환한다.
 
-차단 메시지는 대상 파일과 관련된 context id만 안내하려고 한다. source path mapping이 있으면 `src/a.py` 수정 시 `src/b.py` context까지 요구하지 않는다.
+차단 메시지는 대상 파일과 관련된 context id만 안내하려고 한다. source path mapping이 있으면 `src/a.py` 수정 시 `src/b.py` context까지 요구하지 않는다. 반대로 여러 current-turn context가 있는데 source path mapping이 불완전하면 target 파일을 특정할 수 없으므로 보수적으로 차단한다.
 
 ## 9. Orphan marker와 write remap
 
@@ -414,6 +430,8 @@ PostgreSQL `requests` 테이블:
 | `compress_structured_summaries` | 구조화 출력 요약 수 |
 | `compress_tool_result_refs` | ToolResult dedupe reference hit |
 | `compress_tool_result_stores` | ToolResult 원문 저장 수 |
+| `compress_history_contexts` | history 후보에서 생성된 압축 context 수 |
+| `compress_history_candidate_messages` | history 후보 중 실제 압축된 message 수 |
 | `compress_any` | 실제 압축 발생 여부 |
 | `compress_context_ids` | 생성 context 수 |
 | `compress_saved_tokens_est` | 추정 입력 토큰 절감 |
@@ -436,6 +454,9 @@ PostgreSQL `requests` 테이블:
 | `compress_current_turn_matched_tool_names` | 허용 매칭된 도구명 |
 | `compress_current_turn_rejected_tool_names` | reject된 도구명 |
 | `compress_current_turn_source_paths` | current-turn source path 목록 |
+| `compress_current_turn_source_path_results` | source path를 찾은 allowed current-turn ToolResult 수 |
+| `compress_current_turn_missing_source_paths` | source path를 찾지 못한 allowed current-turn ToolResult 수 |
+| `compress_current_turn_missing_source_path_tool_results` | source path를 찾지 못한 tool_result id |
 
 ### ToolResult/Text 실패 진단
 
@@ -473,7 +494,9 @@ PostgreSQL `requests` 테이블:
 | `current_turn_write_guard_block_reason` | 차단 사유 |
 | `current_turn_write_guard_required_contexts` | 필요한 context 수 |
 | `current_turn_write_guard_retrieved_contexts` | retrieve된 context 수 |
+| `current_turn_write_guard_validated_contexts` | old_string 또는 source write 검증을 통과한 context 수 |
 | `current_turn_write_guard_validated_context_ids` | 검증 통과 context id |
+| `current_turn_write_guard_unknown_source_contexts` | source path mapping이 없어 target path와 연결하지 못한 context 수 |
 
 ## 11. Admin UI
 
@@ -514,6 +537,8 @@ Admin UI 기능:
 - Measure summary 카드
 - 요청별 원본 입력/압축 후 입력 그래프
 - Request details 기본 컬럼과 진단 상세 토글
+- 진단 상세의 Guard 컬럼에서 guard mode, reason, target path, 필요/retrieve/검증 context 수 표시
+- 진단 상세의 Compression detail에서 history context 수와 current-turn context 수를 분리 표시
 
 Measure Request details 기본 컬럼:
 
