@@ -173,13 +173,14 @@ PCFI가 block하면 체인은 upstream 호출 없이 중단하고 400 응답을 
 | `original_lines` | 원본 파일 기준 1-based line range |
 | `marker_line` | 압축본에서 marker가 있는 line |
 | `symbol_name` | parent function/method 이름 |
+| `symbol_index` | cluster 내부 symbol 목록. 일반 function/method는 단일 symbol |
 | `fact_manifest` | 압축본에 남긴 구조적 사실 목록 |
 
 `CCIM_COMPRESSION_CLUSTER_SUMMARY_ENABLED=true`이면 연속 반복 함수군을 하나의 context로 묶는다. `large_reference.py`의 `transform_batch_001..040` 같은 fixture에서 context 수와 토큰을 크게 줄인다. 단, 한 context가 넓은 원본 범위를 포함하므로 retrieve/write guard UX를 계속 관측해야 한다.
 
-#### Python AST fact manifest
+#### AST fact manifest
 
-압축된 본문을 마커 하나만으로 대체하면 모델이 함수 사이의 관계를 추측할 수 있다. 그래서 Python 압축은 마커 직전에 `# CCIM fact:` 주석을 추가한다.
+압축된 본문을 마커 하나만으로 대체하면 모델이 함수 사이의 관계를 추측할 수 있다. 그래서 압축은 마커 직전에 `# CCIM fact:` 주석을 추가한다.
 
 예:
 
@@ -194,7 +195,7 @@ PCFI가 block하면 체인은 upstream 호출 없이 중단하고 400 응답을 
 
 - 일반 함수 압축: 해당 함수 body marker 직전
 - 반복 함수군 cluster 압축: cluster marker 직전
-- Java/C# 압축: 현재 fact manifest 미적용
+- Java/C# 압축: 해당 method/constructor body marker 직전
 
 추출하는 fact:
 
@@ -206,6 +207,18 @@ PCFI가 block하면 체인은 upstream 호출 없이 중단하고 400 응답을 
 | `reads` | `raw.get('score')`, `item.payload.get('status')` 같은 주요 읽기 접근 |
 | `relationship` | 숫자 suffix 함수군 중 일부만 호출하는 함수가 있을 때 호출한 함수군 범위를 명시 |
 | `does_not_call` | 숫자 suffix 함수군의 first/last 중 호출하지 않은 대표 함수를 명시 |
+| `cluster_symbols` | cluster 내부 symbol index의 compact sample과 count |
+
+Java/C# fact manifest는 tree-sitter method/constructor node에서 다음만 보수적으로 남긴다.
+
+| fact | Java/C# 생성 규칙 |
+|---|---|
+| `signature` | method/constructor body 시작 전까지의 선언부 |
+| `calls` | Java `method_invocation`, C# `invocation_expression`의 호출 대상 |
+| `writes` | `variable_declarator`, `assignment_expression`의 좌변/우변 |
+| `reads` | array/index access 계열 노드 |
+
+fact manifest는 압축률을 갉아먹을 수 있으므로 길이 예산을 둔다. 현재 구현은 block당 최대 12개 fact, fact당 최대 240자, calls/writes/reads 항목별 최대 8개를 남긴다. Python의 함수당 fact 종류 수는 기존처럼 최대 4개로 유지한다.
 
 반복 함수군에서는 전체 40개 함수의 fact를 모두 남기면 압축 효과가 줄어든다. 현재 구현은 cluster 안에서 첫 함수와 마지막 함수만 fact로 남긴다. `transform_batch_001..040`처럼 batch 번호가 의미를 갖는 fixture에서 시작값과 끝값을 보존하기 위한 절충이다.
 

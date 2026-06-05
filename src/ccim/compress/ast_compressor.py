@@ -25,6 +25,10 @@ from ccim.compress.markers import build_marker
 from ccim.utils.tokens import estimate_text_tokens
 
 _MIN_BODY_LINES = 2
+_MAX_FACTS_PER_FUNCTION = 4
+_MAX_FACTS_PER_BLOCK = 12
+_MAX_FACT_CHARS = 240
+_MAX_FACT_ITEMS = 8
 
 # 언어별 파서 캐시 (lazy 로드)
 _PARSER_CACHE: dict[str, Parser] = {}
@@ -87,6 +91,7 @@ class CompressedBlock:
     original_lines: tuple[int, int]  # 1-based [start, end] (inclusive)
     marker_line: int                  # 압축본에서 마커가 차지하는 1-based 라인 번호
     symbol_name: str | None = None
+    symbol_index: tuple[str, ...] = ()
     fact_manifest: tuple[str, ...] = ()
 
 
@@ -117,6 +122,7 @@ class _FunctionCluster:
     end_row: int
     first_body_row: int
     symbol_name: str
+    symbol_index: tuple[str, ...]
     count: int
 
 
@@ -202,14 +208,17 @@ class ASTCompressor:
                 body_code = "\n".join(
                     original_lines[cluster.start_row : cluster.end_row + 1]
                 )
-                fact_manifest = (
-                    self._python_fact_manifest(
-                        body_code,
-                        max_functions=2,
-                        extra_facts=relationship_facts,
+                fact_manifest = self._bounded_facts(
+                    (
+                        self._cluster_symbol_index_facts(cluster)
+                        + self._python_fact_manifest(
+                            body_code,
+                            max_functions=2,
+                            extra_facts=relationship_facts,
+                        )
                     )
                     if lang == "python"
-                    else ()
+                    else self._cluster_symbol_index_facts(cluster)
                 )
                 for fact in fact_manifest:
                     compressed_lines.append(f"# CCIM fact: {fact}")
@@ -226,6 +235,7 @@ class ASTCompressor:
                         original_lines=(cluster.start_row + 1, cluster.end_row + 1),
                         marker_line=marker_line_idx,
                         symbol_name=cluster.symbol_name,
+                        symbol_index=cluster.symbol_index,
                         fact_manifest=fact_manifest,
                     )
                 )
@@ -272,14 +282,14 @@ class ASTCompressor:
                 fact_source = "\n".join(
                     original_lines[parent.start_point[0] : parent.end_point[0] + 1]
                 )
-            fact_manifest = (
-                self._python_fact_manifest(
-                    fact_source,
-                    extra_facts=relationship_facts,
-                )
-                if lang == "python"
-                else ()
+            fact_manifest = self._language_fact_manifest(
+                lang,
+                fact_source,
+                parent,
+                source_bytes,
+                extra_facts=relationship_facts,
             )
+            symbol_name = self._symbol_name(parent, source_bytes)
             for fact in fact_manifest:
                 compressed_lines.append(f"{indent}# CCIM fact: {fact}")
                 line_mapping[len(compressed_lines)] = start_row + 1
@@ -294,7 +304,8 @@ class ASTCompressor:
                     original_code=body_code,
                     original_lines=(start_row + 1, end_row + 1),
                     marker_line=marker_line_idx,
-                    symbol_name=self._symbol_name(parent, source_bytes),
+                    symbol_name=symbol_name,
+                    symbol_index=(symbol_name,) if symbol_name else (),
                     fact_manifest=fact_manifest,
                 )
             )
@@ -349,6 +360,191 @@ class ASTCompressor:
         return source_bytes[name_node.start_byte:name_node.end_byte].decode(
             "utf-8", errors="replace"
         )
+
+    @classmethod
+    def _language_fact_manifest(
+        cls,
+        language: str,
+        code: str,
+        node: Node | None,
+        source_bytes: bytes,
+        *,
+        extra_facts: dict[str, tuple[str, ...]] | None = None,
+    ) -> tuple[str, ...]:
+        if language == "python":
+            return cls._bounded_facts(
+                cls._python_fact_manifest(code, extra_facts=extra_facts)
+            )
+        if node is None:
+            return ()
+        return cls._bounded_facts(
+            cls._tree_sitter_function_facts(node, source_bytes, language)
+        )
+
+    @classmethod
+    def _tree_sitter_function_facts(
+        cls, node: Node, source_bytes: bytes, language: str
+    ) -> tuple[str, ...]:
+        name = cls._symbol_name(node, source_bytes)
+        if not name:
+            return ()
+
+        facts = [f"{name}: signature={cls._tree_sitter_signature(node, source_bytes)}"]
+        calls = cls._tree_sitter_calls(node, source_bytes, language)
+        if calls:
+            facts.append(f"{name}: calls={', '.join(calls)}")
+        writes = cls._tree_sitter_writes(node, source_bytes)
+        if writes:
+            facts.append(f"{name}: writes={', '.join(writes)}")
+        reads = cls._tree_sitter_reads(node, source_bytes)
+        if reads:
+            facts.append(f"{name}: reads={', '.join(reads)}")
+        return tuple(facts)
+
+    @classmethod
+    def _tree_sitter_signature(cls, node: Node, source_bytes: bytes) -> str:
+        body = node.child_by_field_name("body")
+        end_byte = body.start_byte if body is not None else node.end_byte
+        return cls._compact_code_text(
+            source_bytes[node.start_byte:end_byte].decode("utf-8", errors="replace")
+        ).rstrip("{ ")
+
+    @classmethod
+    def _tree_sitter_calls(
+        cls, node: Node, source_bytes: bytes, language: str
+    ) -> list[str]:
+        calls: list[str] = []
+        seen: set[str] = set()
+        for child in cls._iter_named_descendants(node):
+            text: str | None = None
+            if language == "java" and child.type == "method_invocation":
+                name_node = child.child_by_field_name("name")
+                if name_node is None:
+                    continue
+                name = cls._node_text(name_node, source_bytes)
+                object_node = child.child_by_field_name("object")
+                text = (
+                    f"{cls._node_text(object_node, source_bytes)}.{name}"
+                    if object_node is not None
+                    else name
+                )
+            elif language == "csharp" and child.type == "invocation_expression":
+                function_node = child.child_by_field_name("function")
+                if function_node is not None:
+                    text = cls._node_text(function_node, source_bytes)
+            if text and text not in seen:
+                calls.append(text)
+                seen.add(text)
+        return calls[:_MAX_FACT_ITEMS]
+
+    @classmethod
+    def _tree_sitter_writes(cls, node: Node, source_bytes: bytes) -> list[str]:
+        writes: list[str] = []
+        seen: set[str] = set()
+        for child in cls._iter_named_descendants(node):
+            fact: str | None = None
+            if child.type == "variable_declarator":
+                name_node = child.child_by_field_name("name")
+                value_node = child.child_by_field_name("value")
+                if value_node is None:
+                    value_node = cls._last_named_child_except(child, name_node)
+                if name_node is not None and value_node is not None:
+                    fact = (
+                        f"{cls._node_text(name_node, source_bytes)}="
+                        f"{cls._node_text(value_node, source_bytes)}"
+                    )
+            elif child.type == "assignment_expression":
+                left_node = child.child_by_field_name("left")
+                right_node = child.child_by_field_name("right")
+                if left_node is not None and right_node is not None:
+                    fact = (
+                        f"{cls._node_text(left_node, source_bytes)}="
+                        f"{cls._node_text(right_node, source_bytes)}"
+                    )
+            if fact and fact not in seen:
+                writes.append(fact)
+                seen.add(fact)
+        return writes[:_MAX_FACT_ITEMS]
+
+    @classmethod
+    def _tree_sitter_reads(cls, node: Node, source_bytes: bytes) -> list[str]:
+        reads: list[str] = []
+        seen: set[str] = set()
+        for child in cls._iter_named_descendants(node):
+            if child.type not in {
+                "array_access",
+                "element_access_expression",
+                "subscript_expression",
+            }:
+                continue
+            text = cls._node_text(child, source_bytes)
+            if text and text not in seen:
+                reads.append(text)
+                seen.add(text)
+        return reads[:_MAX_FACT_ITEMS]
+
+    @classmethod
+    def _iter_named_descendants(cls, node: Node) -> list[Node]:
+        result: list[Node] = []
+        stack = list(reversed(node.named_children))
+        while stack:
+            current = stack.pop()
+            result.append(current)
+            stack.extend(reversed(current.named_children))
+        return result
+
+    @staticmethod
+    def _last_named_child_except(node: Node, excluded: Node | None) -> Node | None:
+        for child in reversed(node.named_children):
+            if excluded is None or child.id != excluded.id:
+                return child
+        return None
+
+    @classmethod
+    def _node_text(cls, node: Node, source_bytes: bytes) -> str:
+        return cls._compact_code_text(
+            source_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+        )
+
+    @staticmethod
+    def _compact_code_text(text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    @classmethod
+    def _cluster_symbol_index_facts(cls, cluster: _FunctionCluster) -> tuple[str, ...]:
+        symbols = cluster.symbol_index
+        if not symbols:
+            return ()
+        if len(symbols) <= 6:
+            sample = ", ".join(symbols)
+        else:
+            sample = ", ".join((*symbols[:3], "...", *symbols[-2:]))
+        return (f"cluster_symbols={sample}; count={len(symbols)}",)
+
+    @classmethod
+    def _bounded_facts(
+        cls,
+        facts: tuple[str, ...] | list[str],
+        *,
+        max_facts: int = _MAX_FACTS_PER_BLOCK,
+    ) -> tuple[str, ...]:
+        bounded: list[str] = []
+        seen: set[str] = set()
+        for fact in facts:
+            text = cls._shorten_fact(fact)
+            if text in seen:
+                continue
+            bounded.append(text)
+            seen.add(text)
+            if len(bounded) >= max_facts:
+                break
+        return tuple(bounded)
+
+    @staticmethod
+    def _shorten_fact(fact: str) -> str:
+        if len(fact) <= _MAX_FACT_CHARS:
+            return fact
+        return fact[: _MAX_FACT_CHARS - 3].rstrip() + "..."
 
     @classmethod
     def _python_fact_manifest(
@@ -445,7 +641,7 @@ class ASTCompressor:
         reads = cls._python_reads(func)
         if reads:
             facts.append(f"{func.name}: reads={', '.join(reads)}")
-        return facts[:4]
+        return facts[:_MAX_FACTS_PER_FUNCTION]
 
     @staticmethod
     def _python_signature(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
@@ -478,7 +674,7 @@ class ASTCompressor:
             if name is not None and name not in seen:
                 calls.append(name)
                 seen.add(name)
-        return calls[:8]
+        return calls[:_MAX_FACT_ITEMS]
 
     @staticmethod
     def _python_direct_call_names(
@@ -526,7 +722,7 @@ class ASTCompressor:
                 if fact not in seen:
                     writes.append(fact)
                     seen.add(fact)
-        return writes[:8]
+        return writes[:_MAX_FACT_ITEMS]
 
     @classmethod
     def _python_reads(cls, func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
@@ -546,7 +742,7 @@ class ASTCompressor:
                 if text is not None and text not in seen:
                     reads.append(text)
                     seen.add(text)
-        return reads[:8]
+        return reads[:_MAX_FACT_ITEMS]
 
     @classmethod
     def _python_get_call_text(cls, node: ast.Call) -> str | None:
@@ -610,6 +806,11 @@ class ASTCompressor:
                 continue
             first_symbol = cls._symbol_name(first_parent, source_bytes) or "unknown"
             last_symbol = cls._symbol_name(last_parent, source_bytes) or first_symbol
+            symbol_index = tuple(
+                symbol
+                for node in nodes
+                if (symbol := cls._symbol_name(node.parent, source_bytes))
+            )
             symbol_name = (
                 first_symbol if first_symbol == last_symbol else f"{first_symbol}..{last_symbol}"
             )
@@ -618,6 +819,7 @@ class ASTCompressor:
                 end_row=last_parent.end_point[0],
                 first_body_row=nodes[0].start_point[0],
                 symbol_name=symbol_name,
+                symbol_index=symbol_index,
                 count=len(nodes),
             )
         return result

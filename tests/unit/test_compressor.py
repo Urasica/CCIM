@@ -165,9 +165,16 @@ def test_repeated_functions_can_be_clustered() -> None:
     assert len(clustered.blocks) == 1
     assert "CCIM repeated function cluster" in clustered.compressed_text
     assert "transform_batch_001..transform_batch_004" in clustered.compressed_text
+    assert "cluster_symbols=transform_batch_001" in clustered.compressed_text
     assert clustered.blocks[0].symbol_name == "transform_batch_001..transform_batch_004"
+    assert clustered.blocks[0].symbol_index == (
+        "transform_batch_001",
+        "transform_batch_002",
+        "transform_batch_003",
+        "transform_batch_004",
+    )
     assert "output.append" in clustered.blocks[0].original_code
-    assert clustered.tokens_saved > normal.tokens_saved
+    assert clustered.bytes_saved > normal.bytes_saved
 
 
 def test_python_fact_manifest_preserves_calls_and_literal_writes() -> None:
@@ -455,17 +462,24 @@ def test_java_method_body_compressed() -> None:
     code = (
         "public class Greeter {\n"
         "    public String greet(String name) {\n"
-        "        String msg = \"Hello, \" + name;\n"
+        "        String msg = helper(name);\n"
         "        System.out.println(msg);\n"
         "        return msg;\n"
+        "    }\n"
+        "    private String helper(String value) {\n"
+        "        return value.trim();\n"
         "    }\n"
         "}\n"
     )
     result = ASTCompressor().compress(code, session_id="t", language="java")
     assert "<<CTX_t:001>>" in result.compressed_text
     assert "public String greet(String name)" in result.compressed_text
-    assert "System.out.println" not in result.compressed_text
-    assert len(result.blocks) == 1
+    assert "String msg = helper(name);" not in result.compressed_text
+    assert "# CCIM fact: greet: calls=helper, System.out.println" in result.compressed_text
+    assert "# CCIM fact: greet: writes=msg=helper(name)" in result.compressed_text
+    assert result.blocks[0].fact_manifest
+    assert result.blocks[0].symbol_index == ("greet",)
+    assert len(result.blocks) == 2
 
 
 @pytest.mark.skipif(
@@ -476,14 +490,21 @@ def test_csharp_method_body_compressed() -> None:
     code = (
         "public class Greeter {\n"
         "    public string Greet(string name) {\n"
-        "        var msg = $\"Hello, {name}\";\n"
+        "        var msg = Helper(name);\n"
         "        Console.WriteLine(msg);\n"
         "        return msg;\n"
+        "    }\n"
+        "    private string Helper(string value) {\n"
+        "        return value.Trim();\n"
         "    }\n"
         "}\n"
     )
     result = ASTCompressor().compress(code, session_id="t", language="csharp")
     assert "<<CTX_t:001>>" in result.compressed_text
     assert "public string Greet(string name)" in result.compressed_text
-    assert "Console.WriteLine" not in result.compressed_text
-    assert len(result.blocks) == 1
+    assert "var msg = Helper(name);" not in result.compressed_text
+    assert "# CCIM fact: Greet: calls=Helper, Console.WriteLine" in result.compressed_text
+    assert "# CCIM fact: Greet: writes=msg=Helper(name)" in result.compressed_text
+    assert result.blocks[0].fact_manifest
+    assert result.blocks[0].symbol_index == ("Greet",)
+    assert len(result.blocks) == 2
