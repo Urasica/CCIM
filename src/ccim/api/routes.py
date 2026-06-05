@@ -34,13 +34,13 @@ async def create_message(
     V1 스트리밍 정책: 내부적으로 `complete()` 후 SSE 합성 방출.
     (청크 단위 실시간 relay는 V2에서 retrieve_original 인터셉트 분리 후 활성화)
     """
-    from ccim.middleware.chain import RequestContext, response_dict_to_sse
-
     # session_id 결정 순서:
     # 1) x-ccim-session 헤더 — 마커 안전 문자([A-Za-z0-9\-])만 허용, 위반 시 400
     # 2) CCIM_SESSION_PREFIX + UUID — prefix만 sanitize, UUID는 항상 안전
     import re as _re
+
     from ccim.config import get_settings
+    from ccim.middleware.chain import RequestContext, response_dict_to_sse
     _prefix = get_settings().session_prefix
     _raw_header = http.headers.get("x-ccim-session")
     if _raw_header:
@@ -114,6 +114,10 @@ async def create_message(
     # -- 스트리밍 응답 -------------------------------------------------------
     if request.stream:
         response_data = ctx.response_json
+        stream_mode = (
+            ctx.extras.get("feature_flags", {}).get("stream_response_mode")
+            or "synthesized_complete_sse"
+        )
 
         async def _sse_generator() -> AsyncIterator[bytes]:
             async for chunk in response_dict_to_sse(response_data):
@@ -125,6 +129,7 @@ async def create_message(
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
                 "X-CCIM-Session": session_id,
+                "X-CCIM-Stream-Mode": str(stream_mode),
             },
         )
 

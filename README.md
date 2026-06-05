@@ -327,5 +327,5 @@ CCIM에는 다음과 같은 트레이드 오프가 있습니다.
 - 압축된 파일을 수정하기 전에 원문 복구가 되었는지
 - 작은 입력에서 압축을 억지로 시도하지 않고 정상적으로 스킵되는지
 
-스트리밍은 현재 완성 응답을 받은 뒤 SSE 형식으로 변환해 반환합니다.  
-upstream 응답 조각을 즉시 중계하는 실시간 chunk relay는 아직 별도 고려하지 않고 있습니다.
+스트리밍은 현재 upstream complete 응답을 받은 뒤 SSE 형식으로 변환해 반환합니다. `stream=true` 요청도 gateway 내부 upstream 호출은 `stream=false`로 처리하며, 클라이언트 응답에는 `X-CCIM-Stream-Mode: synthesized_complete_sse`를 붙입니다.
+upstream 응답 조각을 즉시 중계하는 실시간 chunk relay는 retrieve loop intercept와 충돌하므로 아직 별도 경로로 분리하지 않았습니다.

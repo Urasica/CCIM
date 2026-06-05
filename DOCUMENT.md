@@ -63,7 +63,7 @@ uv run python tools/admin_server.py
 
 `x-ccim-session` 헤더가 있으면 session id로 사용한다. 허용 문자는 `[A-Za-z0-9-]`다. 헤더가 없으면 `CCIM_SESSION_PREFIX + uuid4` 형식으로 생성한다. prefix는 marker-safe하게 sanitize된다.
 
-스트리밍 요청(`stream=true`)은 현재 내부적으로 upstream complete 응답을 받은 뒤 Anthropic SSE 형식으로 합성해 반환한다. 실시간 청크 relay는 retrieve loop와 충돌 가능성이 있어 현재 범위 밖이다.
+스트리밍 요청(`stream=true`)은 현재 내부적으로 upstream complete 응답을 받은 뒤 Anthropic SSE 형식으로 합성해 반환한다. gateway는 upstream 호출을 `stream=false`로 강제하고, 클라이언트에는 `X-CCIM-Stream-Mode: synthesized_complete_sse` header를 반환한다. 실시간 청크 relay는 retrieve loop와 충돌 가능성이 있어 현재 범위 밖이다.
 
 ### 3.2 Middleware chain
 
@@ -368,6 +368,15 @@ Retrieve telemetry:
 | `retrieve_original_result_chars` | retrieve 결과 문자 수 |
 | `retrieve_original_loop_limit_exceeded` | loop limit 초과 여부 |
 | `retrieve_original_unresolved_tool_uses` | limit 초과 시 남은 unresolved retrieve tool_use 수 |
+
+Streaming telemetry:
+
+| flag | 의미 |
+|---|---|
+| `stream_requested` | client가 `stream=true`로 요청했는지 여부 |
+| `stream_response_mode` | 현재는 `synthesized_complete_sse` 또는 `json` |
+| `stream_realtime_relay_enabled` | upstream chunk relay 사용 여부. 현재 false |
+| `stream_policy_reason` | stream path 선택 사유. 현재 stream 요청은 retrieve loop intercept를 위해 complete 후 SSE 합성 |
 
 ## 8. Current-turn write guard
 

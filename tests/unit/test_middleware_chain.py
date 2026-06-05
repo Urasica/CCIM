@@ -1441,6 +1441,30 @@ async def test_forward_simple_response() -> None:
     assert ctx.tokens_output == 5
 
 
+async def test_forward_stream_request_uses_synthesized_complete_mode() -> None:
+    seen_stream_values: list[bool] = []
+
+    async def _complete(req: Any) -> dict[str, Any]:
+        seen_stream_values.append(req.stream)
+        return _simple_response("streamed later")
+
+    llm = MagicMock()
+    llm.complete = _complete
+
+    interceptor = MagicMock()
+    mw = ForwardAndInterceptMiddleware(llm_client=llm, interceptor=interceptor)
+    chain = MiddlewareChain(stages=[mw])
+    ctx = _make_ctx(stream=True)
+    await chain.run(ctx)
+
+    assert seen_stream_values == [False]
+    flags = ctx.extras["feature_flags"]
+    assert flags["stream_requested"] is True
+    assert flags["stream_response_mode"] == "synthesized_complete_sse"
+    assert flags["stream_realtime_relay_enabled"] is False
+    assert flags["stream_policy_reason"] == "retrieve_loop_requires_complete_intercept"
+
+
 async def test_forward_retrieve_loop() -> None:
     """retrieve_original tool_use → resolve → 최종 응답."""
     from ccim.reversibility.interceptor import ToolResolution

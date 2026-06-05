@@ -1065,8 +1065,19 @@ class ForwardAndInterceptMiddleware:
     async def __call__(self, ctx: RequestContext, call_next: NextCallable) -> None:
         t0 = time.perf_counter()
         flags = ctx.extras.setdefault("feature_flags", {})
+        requested_stream = bool(ctx.request.stream)
         flags.update(
             {
+                "stream_requested": requested_stream,
+                "stream_response_mode": (
+                    "synthesized_complete_sse" if requested_stream else "json"
+                ),
+                "stream_realtime_relay_enabled": False,
+                "stream_policy_reason": (
+                    "retrieve_loop_requires_complete_intercept"
+                    if requested_stream
+                    else None
+                ),
                 "retrieve_loop_limit": self._max_loops,
                 "retrieve_loop_iterations": 0,
                 "retrieve_original_tool_uses": 0,
@@ -1085,10 +1096,10 @@ class ForwardAndInterceptMiddleware:
         retrieve_cache: dict[str, tuple[str, bool]] = {}
 
         # CCIM_LLM_MODEL이 설정된 경우 upstream 모델명으로 치환 (Roo Code 등이 Claude 모델명 전달 시)
+        request_updates: dict[str, Any] = {"stream": False}
         if self._model_override:
-            working_request = ctx.request.model_copy(update={"model": self._model_override})
-        else:
-            working_request = ctx.request
+            request_updates["model"] = self._model_override
+        working_request = ctx.request.model_copy(update=request_updates)
         response_dict: dict[str, Any] = {}
 
         for loop_idx in range(self._max_loops):

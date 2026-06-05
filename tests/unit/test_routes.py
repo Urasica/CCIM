@@ -7,14 +7,11 @@ FastAPI TestClient를 사용해 HTTP 레이어까지 포함한 검증.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
-import httpx
-import pytest
 from fastapi.testclient import TestClient
 
 from ccim.middleware.chain import RequestContext
-
 
 # ──────────────────────────────────────────────────────────────────
 # Fixtures
@@ -23,8 +20,9 @@ from ccim.middleware.chain import RequestContext
 
 def _make_app(chain_side_effect: Any = None, *, llm_client: Any = None) -> Any:
     """체인을 stub으로 교체한 FastAPI 앱 반환."""
-    from ccim.api.routes import router
     from fastapi import FastAPI
+
+    from ccim.api.routes import router
 
     app = FastAPI()
     app.include_router(router)
@@ -162,9 +160,25 @@ async def test_valid_session_header_accepted() -> None:
         )
 
 
+async def test_stream_response_marks_synthesized_mode() -> None:
+    app = _make_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    body = {**_BASE_BODY, "stream": True}
+
+    with client.stream("POST", "/v1/messages", json=body) as resp:
+        text = "".join(resp.iter_text())
+
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers.get("content-type", "")
+    assert resp.headers["x-ccim-stream-mode"] == "synthesized_complete_sse"
+    assert "message_start" in text
+    assert "message_stop" in text
+
+
 async def test_auto_session_id_uses_safe_chars_only(monkeypatch: Any) -> None:
     """자동 생성 session_id(prefix+UUID)가 마커 안전 문자([A-Za-z0-9-])만 포함."""
     import re
+
     import ccim.config as _config_mod
     from ccim.config import Settings
 
@@ -198,7 +212,6 @@ async def test_auto_session_id_uses_safe_chars_only(monkeypatch: Any) -> None:
 async def test_different_prefixes_produce_different_session_ids(monkeypatch: Any) -> None:
     """team_a, team-a, team.a는 sanitize 후 같은 prefix 형태가 되지만
     UUID 부분 덕분에 서로 다른 session_id가 생성된다."""
-    import re
     import ccim.config as _config_mod
     from ccim.config import Settings
 
