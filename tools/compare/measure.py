@@ -249,6 +249,8 @@ def _format_compress_flags(flags: dict[str, Any]) -> str:
         f"ref={flags.get('compress_tool_result_refs', 0)}",
         f"store={flags.get('compress_tool_result_stores', 0)}",
         f"ret_use={flags.get('retrieve_original_tool_uses', 0)}",
+        f"ret_bulk={flags.get('retrieve_original_bulk_tool_uses', 0)}",
+        f"ret_ctx={flags.get('retrieve_original_context_ids', 0)}",
         f"ret_fetch={flags.get('retrieve_original_store_fetches', 0)}",
         f"ret_cache={flags.get('retrieve_original_cache_hits', 0)}",
         f"ret_t={flags.get('retrieve_original_result_tokens_est', 0)}",

@@ -1074,6 +1074,8 @@ class ForwardAndInterceptMiddleware:
                 "retrieve_original_cache_hits": 0,
                 "retrieve_original_hits": 0,
                 "retrieve_original_misses": 0,
+                "retrieve_original_bulk_tool_uses": 0,
+                "retrieve_original_context_ids": 0,
                 "retrieve_original_tool_use_tokens_est": 0,
                 "retrieve_original_result_tokens_est": 0,
                 "retrieve_original_result_chars": 0,
@@ -1132,36 +1134,56 @@ class ForwardAndInterceptMiddleware:
                 flags["retrieve_original_tool_use_tokens_est"] += estimate_text_tokens(
                     json.dumps(tool_input, ensure_ascii=False, sort_keys=True)
                 )
-                context_id = tool_input.get("context_id", "")
-                if isinstance(context_id, str) and context_id in retrieve_cache:
-                    content_text, is_error = retrieve_cache[context_id]
-                    flags["retrieve_original_cache_hits"] += 1
-                else:
+                context_ids = self._retrieve_context_ids_from_input(tool_input)
+                if context_ids is None:
                     resolution = await self._interceptor.handle_tool_use(
                         tool_input,
                         expected_session_id=ctx.session_id,
                     )
                     content_text = resolution.content
                     is_error = resolution.is_error
-                    if isinstance(context_id, str):
-                        retrieve_cache[context_id] = (content_text, is_error)
                     flags["retrieve_original_store_fetches"] += 1
                     if is_error:
                         flags["retrieve_original_misses"] += 1
                     else:
                         flags["retrieve_original_hits"] += 1
+                    context_ids = []
+                else:
+                    if len(context_ids) > 1 or "context_ids" in tool_input:
+                        flags["retrieve_original_bulk_tool_uses"] += 1
+                    flags["retrieve_original_context_ids"] += len(context_ids)
+                    resolved: list[tuple[str, str, bool]] = []
+                    for context_id in context_ids:
+                        if context_id in retrieve_cache:
+                            item_content, item_error = retrieve_cache[context_id]
+                            flags["retrieve_original_cache_hits"] += 1
+                        else:
+                            resolution = await self._interceptor.handle_tool_use(
+                                {"context_id": context_id},
+                                expected_session_id=ctx.session_id,
+                            )
+                            item_content = resolution.content
+                            item_error = resolution.is_error
+                            retrieve_cache[context_id] = (item_content, item_error)
+                            flags["retrieve_original_store_fetches"] += 1
+                            if item_error:
+                                flags["retrieve_original_misses"] += 1
+                            else:
+                                flags["retrieve_original_hits"] += 1
+                        resolved.append((context_id, item_content, item_error))
+                    is_error = any(item_error for _, _, item_error in resolved)
+                    content_text = self._format_retrieve_result(resolved)
                 flags["retrieve_original_result_tokens_est"] += estimate_text_tokens(
                     content_text
                 )
                 flags["retrieve_original_result_chars"] += len(content_text)
-                if (
-                    isinstance(context_id, str)
-                    and context_id
-                    and not is_error
-                ):
+                for context_id in context_ids:
+                    cached = retrieve_cache.get(context_id)
+                    if cached is None or cached[1]:
+                        continue
                     ctx.extras.setdefault("retrieved_contexts", {})[
                         context_id
-                    ] = content_text
+                    ] = cached[0]
                 tool_result_blocks.append(
                     ToolResultBlock(
                         tool_use_id=b.get("id", ""),
@@ -1214,6 +1236,28 @@ class ForwardAndInterceptMiddleware:
         ctx.tokens_output = usage.get("output_tokens")
         ctx.timings_ms["forward"] = int((time.perf_counter() - t0) * 1000)
         await call_next(ctx)
+
+    @staticmethod
+    def _retrieve_context_ids_from_input(tool_input: dict[str, Any]) -> list[str] | None:
+        if "context_ids" in tool_input:
+            raw_many = tool_input.get("context_ids")
+            if not isinstance(raw_many, list) or not raw_many:
+                return None
+            ids = [item for item in raw_many if isinstance(item, str) and item.strip()]
+            if len(ids) != len(raw_many):
+                return None
+            return list(dict.fromkeys(ids))
+
+        raw_one = tool_input.get("context_id")
+        if isinstance(raw_one, str) and raw_one.strip():
+            return [raw_one]
+        return None
+
+    @staticmethod
+    def _format_retrieve_result(resolved: list[tuple[str, str, bool]]) -> str:
+        if len(resolved) == 1:
+            return resolved[0][1]
+        return "\n\n".join(f"## {context_id}\n{content}" for context_id, content, _ in resolved)
 
 
 class CurrentTurnWriteGuardMiddleware:

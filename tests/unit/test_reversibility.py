@@ -181,6 +181,36 @@ async def test_interceptor_hits_returns_original_code() -> None:
     assert interceptor.stats.retrieve_misses == 0
 
 
+async def test_interceptor_context_ids_returns_grouped_originals() -> None:
+    redis = _FakeRedis()
+    store = ReversibilityStore(redis)
+    await store.put(_record(context_id="001"))
+    await store.put(
+        ContextRecord(
+            session_id="s1",
+            context_id="002",
+            original_code="def g():\n    return 2\n",
+            language="python",
+            line_mapping={1: 1, 2: 2},
+            created_at=datetime(2026, 4, 28, tzinfo=UTC),
+        )
+    )
+    interceptor = ReversibilityInterceptor(store)
+    res = await interceptor.handle_tool_use(
+        {"context_ids": ["s1:001", "s1:002"]},
+        expected_session_id="s1",
+    )
+
+    assert res.is_error is False
+    assert "## s1:001" in res.content
+    assert "def f()" in res.content
+    assert "## s1:002" in res.content
+    assert "def g()" in res.content
+    assert interceptor.stats.retrieve_calls == 1
+    assert interceptor.stats.retrieve_hits == 2
+    assert interceptor.stats.retrieve_misses == 0
+
+
 async def test_interceptor_miss_returns_error_text() -> None:
     redis = _FakeRedis()
     store = ReversibilityStore(redis)
@@ -234,8 +264,10 @@ def test_retrieve_tool_definition_shape() -> None:
     assert RETRIEVE_ORIGINAL_TOOL["name"] == "retrieve_original"
     schema = RETRIEVE_ORIGINAL_TOOL["input_schema"]
     assert schema["type"] == "object"
+    assert {"required": ["context_id"]} in schema["oneOf"]
+    assert {"required": ["context_ids"]} in schema["oneOf"]
     assert "context_id" in schema["properties"]
-    assert "context_id" in schema["required"]
+    assert "context_ids" in schema["properties"]
 
 
 def test_build_system_hint_mentions_marker_format() -> None:

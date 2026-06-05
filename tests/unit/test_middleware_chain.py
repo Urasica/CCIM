@@ -1531,6 +1531,64 @@ async def test_forward_retrieve_uses_request_local_cache() -> None:
     assert flags["retrieve_original_tool_use_tokens_est"] > 0
 
 
+async def test_forward_retrieve_accepts_context_ids_bulk_input() -> None:
+    from ccim.reversibility.interceptor import ToolResolution
+
+    retrieve_bulk = {
+        "id": "msg_ret",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "tu_1",
+                "name": "retrieve_original",
+                "input": {
+                    "context_ids": [
+                        "test_session:001",
+                        "test_session:002",
+                        "test_session:001",
+                    ]
+                },
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 20, "output_tokens": 10},
+    }
+    llm = MagicMock()
+    llm.complete = AsyncMock(side_effect=[retrieve_bulk, _simple_response("final")])
+
+    async def _resolve(tool_input: dict[str, Any], **_: Any) -> ToolResolution:
+        return ToolResolution(
+            content=f"original {tool_input['context_id']}",
+            is_error=False,
+        )
+
+    interceptor = MagicMock()
+    interceptor.handle_tool_use = AsyncMock(side_effect=_resolve)
+
+    ctx = _make_ctx()
+    await MiddlewareChain(
+        stages=[ForwardAndInterceptMiddleware(llm_client=llm, interceptor=interceptor)]
+    ).run(ctx)
+
+    assert ctx.retrieve_original_calls == 1
+    assert interceptor.handle_tool_use.await_count == 2
+    assert ctx.extras["retrieved_contexts"] == {
+        "test_session:001": "original test_session:001",
+        "test_session:002": "original test_session:002",
+    }
+    flags = ctx.extras["feature_flags"]
+    assert flags["retrieve_original_tool_uses"] == 1
+    assert flags["retrieve_original_bulk_tool_uses"] == 1
+    assert flags["retrieve_original_context_ids"] == 2
+    assert flags["retrieve_original_store_fetches"] == 2
+    assert flags["retrieve_original_cache_hits"] == 0
+    assert flags["retrieve_original_hits"] == 2
+    assert flags["retrieve_original_misses"] == 0
+
+
 async def test_forward_max_loop_guard() -> None:
     """max_loops 소진 시 502 loop_limit 오류로 차단. 미해결 tool_use를 클라이언트에 내보내지 않는다."""
     from ccim.reversibility.interceptor import ToolResolution

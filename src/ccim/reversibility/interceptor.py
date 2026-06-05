@@ -64,20 +64,65 @@ class ReversibilityInterceptor:
     ) -> ToolResolution:
         """Resolve a retrieve_original tool input.
 
-        Tool input shape:  {"context_id": "session:ctx"}
+        Tool input shape:  {"context_id": "session:ctx"} or
+        {"context_ids": ["session:001", "session:002"]}.
         Returns text suitable for a tool_result content + an is_error flag.
         Errors are surfaced as text (not exceptions) so the LLM can retry or recover.
         """
-        ctx = tool_input.get("context_id", "")
-        if not isinstance(ctx, str) or ":" not in ctx:
-            self._stats.retrieve_calls += 1
+        context_ids = self._context_ids_from_input(tool_input)
+        self._stats.retrieve_calls += 1
+        if not context_ids:
             self._stats.retrieve_misses += 1
             return ToolResolution(
-                content=f"error: invalid context_id format: {ctx!r}", is_error=True
+                content="error: provide `context_id` or non-empty `context_ids`",
+                is_error=True,
             )
 
-        session_id, _, context_id = ctx.partition(":")
-        self._stats.retrieve_calls += 1
+        if len(context_ids) == 1 and "context_ids" not in tool_input:
+            return await self._resolve_one(
+                context_ids[0],
+                expected_session_id=expected_session_id,
+            )
+
+        sections: list[str] = []
+        any_error = False
+        for full_context_id in context_ids:
+            resolution = await self._resolve_one(
+                full_context_id,
+                expected_session_id=expected_session_id,
+            )
+            any_error = any_error or resolution.is_error
+            sections.append(f"## {full_context_id}\n{resolution.content}")
+        return ToolResolution(content="\n\n".join(sections), is_error=any_error)
+
+    @staticmethod
+    def _context_ids_from_input(tool_input: dict) -> list[str]:
+        raw_many = tool_input.get("context_ids")
+        if raw_many is not None:
+            if not isinstance(raw_many, list):
+                return []
+            ids = [item for item in raw_many if isinstance(item, str) and item.strip()]
+            return list(dict.fromkeys(ids))
+
+        raw_one = tool_input.get("context_id")
+        if isinstance(raw_one, str) and raw_one.strip():
+            return [raw_one]
+        return []
+
+    async def _resolve_one(
+        self,
+        full_context_id: str,
+        *,
+        expected_session_id: str | None = None,
+    ) -> ToolResolution:
+        if ":" not in full_context_id:
+            self._stats.retrieve_misses += 1
+            return ToolResolution(
+                content=f"error: invalid context_id format: {full_context_id!r}",
+                is_error=True,
+            )
+
+        session_id, _, context_id = full_context_id.partition(":")
         if expected_session_id is not None and session_id != expected_session_id:
             self._stats.retrieve_misses += 1
             return ToolResolution(
@@ -92,7 +137,7 @@ class ReversibilityInterceptor:
             self._stats.retrieve_misses += 1
             return ToolResolution(
                 content=(
-                    f"error: context not found or expired: {ctx}. "
+                    f"error: context not found or expired: {full_context_id}. "
                     "Do not fabricate the body; ask the user to re-paste the code."
                 ),
                 is_error=True,

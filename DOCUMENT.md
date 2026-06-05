@@ -348,6 +348,8 @@ Loop limit을 초과하면 502 error envelope을 반환한다.
 
 같은 request 안에서 동일 context id를 여러 번 retrieve하면 request-local cache를 사용한다. `retrieve_original_calls`는 모델이 요청한 tool_use 수를 그대로 세고, Redis 조회 감소분은 feature flags의 cache/store fetch 지표로 분리한다.
 
+여러 context가 필요한 경우 `retrieve_original`은 `context_ids` 배열도 받을 수 있다. gateway는 배열을 context별로 풀어 처리하고, 같은 request 안에서 이미 복원한 context는 cache에서 재사용한다. bulk 결과는 context id별 섹션으로 묶어 LLM에 반환한다.
+
 Retrieve telemetry:
 
 | flag | 의미 |
@@ -355,6 +357,8 @@ Retrieve telemetry:
 | `retrieve_loop_limit` | request당 retrieve loop 최대 횟수 |
 | `retrieve_loop_iterations` | upstream LLM 호출 loop 횟수 |
 | `retrieve_original_tool_uses` | 모델이 낸 `retrieve_original` tool_use 수 |
+| `retrieve_original_bulk_tool_uses` | `context_ids` 배열이나 다중 context를 사용한 retrieve tool_use 수 |
+| `retrieve_original_context_ids` | retrieve tool_use에서 처리한 unique context id 수 |
 | `retrieve_original_store_fetches` | Redis/store 조회 수. request-local cache hit는 제외 |
 | `retrieve_original_cache_hits` | 같은 request 안에서 재사용된 retrieve 결과 수 |
 | `retrieve_original_hits` | store 조회 후 원문을 찾은 수 |

@@ -544,6 +544,8 @@ function retrieveDetail(flags) {
   if (!("retrieve_original_tool_uses" in flags)) return "-";
   const parts = [
     `uses=${flags.retrieve_original_tool_uses || 0}`,
+    flags.retrieve_original_bulk_tool_uses ? `bulk=${flags.retrieve_original_bulk_tool_uses}` : "",
+    flags.retrieve_original_context_ids ? `ctx=${flags.retrieve_original_context_ids}` : "",
     `fetch=${flags.retrieve_original_store_fetches || 0}`,
     `cache=${flags.retrieve_original_cache_hits || 0}`,
     `hit=${flags.retrieve_original_hits || 0}`,
