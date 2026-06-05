@@ -14,11 +14,9 @@ PostgreSQL 연결:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import os
 import sys
 from typing import Any
-
 
 # ─────────────────────────────────────────────────────────────────
 # DB 쿼리
@@ -127,7 +125,7 @@ def print_session_table(rows: list[dict]) -> None:
         comp = r["total_input_compressed"] or 0
         saved_str = _savings_pct(orig, comp) if orig != comp else "-"
         print(
-            f"{str(r['session_id']):<32} "
+            f"{r['session_id']!s:<32} "
             f"{r['requests']:<6} "
             f"{orig:<12,} "
             f"{comp:<12,} "
@@ -250,6 +248,10 @@ def _format_compress_flags(flags: dict[str, Any]) -> str:
         f"log={flags.get('compress_structured_summaries', 0)}",
         f"ref={flags.get('compress_tool_result_refs', 0)}",
         f"store={flags.get('compress_tool_result_stores', 0)}",
+        f"ret_use={flags.get('retrieve_original_tool_uses', 0)}",
+        f"ret_fetch={flags.get('retrieve_original_store_fetches', 0)}",
+        f"ret_cache={flags.get('retrieve_original_cache_hits', 0)}",
+        f"ret_t={flags.get('retrieve_original_result_tokens_est', 0)}",
         f"saved={flags.get('compress_saved_tokens_est', 0)}",
     ]
     return " ".join(parts)

@@ -27,6 +27,7 @@ from ccim.api.schemas import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from ccim.utils.tokens import estimate_text_tokens
 
 _logger = logging.getLogger(__name__)
 
@@ -1063,6 +1064,23 @@ class ForwardAndInterceptMiddleware:
 
     async def __call__(self, ctx: RequestContext, call_next: NextCallable) -> None:
         t0 = time.perf_counter()
+        flags = ctx.extras.setdefault("feature_flags", {})
+        flags.update(
+            {
+                "retrieve_loop_limit": self._max_loops,
+                "retrieve_loop_iterations": 0,
+                "retrieve_original_tool_uses": 0,
+                "retrieve_original_store_fetches": 0,
+                "retrieve_original_cache_hits": 0,
+                "retrieve_original_hits": 0,
+                "retrieve_original_misses": 0,
+                "retrieve_original_tool_use_tokens_est": 0,
+                "retrieve_original_result_tokens_est": 0,
+                "retrieve_original_result_chars": 0,
+                "retrieve_original_loop_limit_exceeded": False,
+            }
+        )
+        retrieve_cache: dict[str, tuple[str, bool]] = {}
 
         # CCIM_LLM_MODEL이 설정된 경우 upstream 모델명으로 치환 (Roo Code 등이 Claude 모델명 전달 시)
         if self._model_override:
@@ -1071,7 +1089,8 @@ class ForwardAndInterceptMiddleware:
             working_request = ctx.request
         response_dict: dict[str, Any] = {}
 
-        for _ in range(self._max_loops):
+        for loop_idx in range(self._max_loops):
+            flags["retrieve_loop_iterations"] = loop_idx + 1
             response_dict = await self._client.complete(working_request)
 
             # retrieve_original tool_use 블록 탐색
@@ -1105,25 +1124,49 @@ class ForwardAndInterceptMiddleware:
             # tool_result 메시지 구성
             tool_result_blocks: list[ContentBlock] = []
             for b in retrieve_blocks:
-                resolution = await self._interceptor.handle_tool_use(
-                    b.get("input", {}),
-                    expected_session_id=ctx.session_id,
-                )
+                tool_input = b.get("input", {})
+                if not isinstance(tool_input, dict):
+                    tool_input = {}
                 ctx.retrieve_original_calls += 1
-                context_id = b.get("input", {}).get("context_id", "")
+                flags["retrieve_original_tool_uses"] += 1
+                flags["retrieve_original_tool_use_tokens_est"] += estimate_text_tokens(
+                    json.dumps(tool_input, ensure_ascii=False, sort_keys=True)
+                )
+                context_id = tool_input.get("context_id", "")
+                if isinstance(context_id, str) and context_id in retrieve_cache:
+                    content_text, is_error = retrieve_cache[context_id]
+                    flags["retrieve_original_cache_hits"] += 1
+                else:
+                    resolution = await self._interceptor.handle_tool_use(
+                        tool_input,
+                        expected_session_id=ctx.session_id,
+                    )
+                    content_text = resolution.content
+                    is_error = resolution.is_error
+                    if isinstance(context_id, str):
+                        retrieve_cache[context_id] = (content_text, is_error)
+                    flags["retrieve_original_store_fetches"] += 1
+                    if is_error:
+                        flags["retrieve_original_misses"] += 1
+                    else:
+                        flags["retrieve_original_hits"] += 1
+                flags["retrieve_original_result_tokens_est"] += estimate_text_tokens(
+                    content_text
+                )
+                flags["retrieve_original_result_chars"] += len(content_text)
                 if (
                     isinstance(context_id, str)
                     and context_id
-                    and not resolution.is_error
+                    and not is_error
                 ):
                     ctx.extras.setdefault("retrieved_contexts", {})[
                         context_id
-                    ] = resolution.content
+                    ] = content_text
                 tool_result_blocks.append(
                     ToolResultBlock(
                         tool_use_id=b.get("id", ""),
-                        content=resolution.content,
-                        is_error=resolution.is_error,
+                        content=content_text,
+                        is_error=is_error,
                     )
                 )
 
@@ -1145,6 +1188,8 @@ class ForwardAndInterceptMiddleware:
             and b.get("name") == _RETRIEVE_TOOL_NAME
         ]
         if remaining_retrieve:
+            flags["retrieve_original_loop_limit_exceeded"] = True
+            flags["retrieve_original_unresolved_tool_uses"] = len(remaining_retrieve)
             _logger.error(
                 "[forward] retrieve_original loop limit(%d) 소진 — unresolved tool_use %d개",
                 self._max_loops,

@@ -386,7 +386,7 @@ function renderMeasureDetails(data) {
     return;
   }
   const diagnosticHeaders = showMeasureDiagnostics
-    ? `<th class="diagnostic">Guard</th><th class="diagnostic">Metadata</th><th class="diagnostic">Compression detail</th>`
+    ? `<th class="diagnostic">Guard</th><th class="diagnostic">Retrieve</th><th class="diagnostic">Metadata</th><th class="diagnostic">Compression detail</th>`
     : "";
   document.getElementById("measureDetails").innerHTML = `<h3>요청 상세</h3>
     <table>
@@ -403,6 +403,7 @@ function detailRow(item) {
   const saved = original - sent;
   const diagnosticCells = showMeasureDiagnostics ? `
     <td class="diagnostic">${escapeHtml(guardDetail(r.feature_flags || {}))}</td>
+    <td class="diagnostic">${escapeHtml(retrieveDetail(r.feature_flags || {}))}</td>
     <td class="diagnostic">${escapeHtml(metadataDetail(r.feature_flags || {}))}</td>
     <td class="diagnostic">${escapeHtml(compressDetail(r.feature_flags || {}))}</td>` : "";
   return `<tr>
@@ -535,6 +536,21 @@ function guardDetail(flags) {
     flags.current_turn_write_guard_retrieved_contexts ? `got=${flags.current_turn_write_guard_retrieved_contexts}` : "",
     flags.current_turn_write_guard_validated_contexts ? `valid=${flags.current_turn_write_guard_validated_contexts}` : "",
     flags.current_turn_write_guard_unknown_source_contexts ? `unknown_src=${flags.current_turn_write_guard_unknown_source_contexts}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" ") : "-";
+}
+function retrieveDetail(flags) {
+  if (!flags || !Object.keys(flags).length) return "-";
+  if (!("retrieve_original_tool_uses" in flags)) return "-";
+  const parts = [
+    `uses=${flags.retrieve_original_tool_uses || 0}`,
+    `fetch=${flags.retrieve_original_store_fetches || 0}`,
+    `cache=${flags.retrieve_original_cache_hits || 0}`,
+    `hit=${flags.retrieve_original_hits || 0}`,
+    flags.retrieve_original_misses ? `miss=${flags.retrieve_original_misses}` : "",
+    flags.retrieve_original_result_tokens_est ? `result_t=${flags.retrieve_original_result_tokens_est}` : "",
+    flags.retrieve_original_tool_use_tokens_est ? `arg_t=${flags.retrieve_original_tool_use_tokens_est}` : "",
+    flags.retrieve_original_loop_limit_exceeded ? "loop_limit=true" : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" ") : "-";
 }

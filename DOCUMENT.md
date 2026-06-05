@@ -346,6 +346,25 @@ TTL은 `CCIM_REDIS_TTL_SECONDS`로 제어한다. 기본값은 3600초다.
 
 Loop limit을 초과하면 502 error envelope을 반환한다.
 
+같은 request 안에서 동일 context id를 여러 번 retrieve하면 request-local cache를 사용한다. `retrieve_original_calls`는 모델이 요청한 tool_use 수를 그대로 세고, Redis 조회 감소분은 feature flags의 cache/store fetch 지표로 분리한다.
+
+Retrieve telemetry:
+
+| flag | 의미 |
+|---|---|
+| `retrieve_loop_limit` | request당 retrieve loop 최대 횟수 |
+| `retrieve_loop_iterations` | upstream LLM 호출 loop 횟수 |
+| `retrieve_original_tool_uses` | 모델이 낸 `retrieve_original` tool_use 수 |
+| `retrieve_original_store_fetches` | Redis/store 조회 수. request-local cache hit는 제외 |
+| `retrieve_original_cache_hits` | 같은 request 안에서 재사용된 retrieve 결과 수 |
+| `retrieve_original_hits` | store 조회 후 원문을 찾은 수 |
+| `retrieve_original_misses` | invalid id, session mismatch, TTL 만료 등 실패 수 |
+| `retrieve_original_tool_use_tokens_est` | retrieve tool input JSON의 추정 토큰 비용 |
+| `retrieve_original_result_tokens_est` | LLM에 다시 보낸 retrieve 결과의 추정 토큰 비용 |
+| `retrieve_original_result_chars` | retrieve 결과 문자 수 |
+| `retrieve_original_loop_limit_exceeded` | loop limit 초과 여부 |
+| `retrieve_original_unresolved_tool_uses` | limit 초과 시 남은 unresolved retrieve tool_use 수 |
+
 ## 8. Current-turn write guard
 
 `CurrentTurnWriteGuardMiddleware`
