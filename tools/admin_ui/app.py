@@ -6,9 +6,9 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
-from . import dependencies, measure, process, settings
+from . import dependencies, measure, process, redis_contexts, settings
 from .config import HOST, PORT
 from .html import HTML
 from .schemas import MeasurePayload, SettingsPayload
@@ -24,6 +24,11 @@ def _check_token(x_ccim_admin_token: str | None = Header(default=None)) -> None:
     token = _admin_token()
     if token and x_ccim_admin_token != token:
         raise HTTPException(status_code=401, detail="invalid admin token")
+
+
+def _safe_report_filename_part(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in value.strip())
+    return safe.strip("-") or "run"
 
 
 async def _dependency_status() -> dict[str, Any]:
@@ -120,23 +125,38 @@ async def measure_data(
 ) -> dict[str, Any]:
     _check_token(x_ccim_admin_token)
     try:
-        left_rows = measure.fetch_measure_requests(payload.left, payload.since)
-        right_rows = measure.fetch_measure_requests(payload.right, payload.since)
+        return measure.measure_payload(payload.left, payload.right, payload.since)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"measure query failed: {exc}") from exc
-    return {
-        "left": {
-            "label": payload.left,
-            "summary": measure.summarize_measure_requests(left_rows),
-            "requests": left_rows,
-        },
-        "right": {
-            "label": payload.right,
-            "summary": measure.summarize_measure_requests(right_rows),
-            "requests": right_rows,
-        },
-        "since": payload.since,
-    }
+
+
+@app.post("/api/measure-report")
+async def measure_report(
+    payload: MeasurePayload,
+    x_ccim_admin_token: str | None = Header(default=None),
+) -> Response:
+    _check_token(x_ccim_admin_token)
+    try:
+        data = measure.measure_payload(payload.left, payload.right, payload.since)
+        markdown = measure.render_markdown_report(data)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"measure report failed: {exc}") from exc
+    left = _safe_report_filename_part(payload.left)
+    right = _safe_report_filename_part(payload.right)
+    filename = f"ccim-report-{left}-vs-{right}-{payload.since}m.md"
+    return Response(
+        markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/redis-contexts")
+async def redis_context_overview(
+    x_ccim_admin_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _check_token(x_ccim_admin_token)
+    return await redis_contexts.context_overview()
 
 
 @app.get("/api/ccim-log")

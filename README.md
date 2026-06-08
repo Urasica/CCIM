@@ -120,9 +120,9 @@ CCIM은 이런 write tool use를 검사하고, 필요한 원본 복구가 부족
 
 `tools/admin_server.py`, `tools/admin_ui/`
 
-브라우저에서 `.env` 설정을 수정하고, CCIM 프로세스를 시작, 정지, 재시작할 수 있습니다. Redis, PostgreSQL, CCIM 상태도 확인합니다.
+브라우저에서 `.env` 설정을 수정하고, CCIM 프로세스를 시작, 정지, 재시작할 수 있습니다. Redis, PostgreSQL, CCIM 상태도 확인합니다. Redis context 화면에서는 session별 context index, TTL, memory estimate, source path, symbol 정보를 확인할 수 있습니다.
 
-Measure 화면은 요청별 원본 입력, 전송 입력, 출력, 절감량, 지연, guard, metadata, compression detail을 보여줍니다. 최근 UI에서는 기본 표시는 핵심 지표 위주로 두고, guard와 세부 metadata는 상세 보기에서 확인하도록 정리했습니다.
+Measure 화면은 요청별 원본 입력, 전송 입력, 출력, 절감량, 지연, guard, retrieve, metadata, compression detail을 보여줍니다. 기본 표시는 핵심 지표 위주로 두고, 요청 상세는 compression/retrieve/guard/stream 조건으로 필터링할 수 있습니다. 비교 결과는 Admin UI에서 markdown report로 내보낼 수 있습니다.
 
 ## 구조
 
@@ -144,9 +144,9 @@ CCIM Gateway
     v
 Upstream LLM
 
-Redis       : 압축 원본, ToolResult 원문, line mapping 저장
-PostgreSQL  : 요청별 토큰, 지연, retrieve 횟수, compression detail 저장
-Admin UI    : 설정, 프로세스 제어, 측정 결과 확인
+Redis       : 압축 원본, ToolResult 원문, line mapping, session context index 저장
+PostgreSQL  : 요청별 토큰, 지연, retrieve 횟수, compression detail과 operational metrics view 저장
+Admin UI    : 설정, 프로세스 제어, 측정 결과, Redis context 상태 확인
 ```
 
 ## 최근 측정 결과
@@ -264,7 +264,7 @@ CCIM_COMPRESSION_ENABLED=false
 
 ## 측정과 검증
 
-Measure UI에서 prefix를 넣어 비교할 수 있습니다.  
+Measure UI에서 prefix를 넣어 비교하고 markdown report로 export할 수 있습니다.
 CLI로는 다음처럼 확인합니다.
 
 ```powershell
@@ -293,9 +293,10 @@ uv run python tools/compare/direct_test.py --session direct-check
 | `src/ccim/compress/ast_compressor.py` | tree-sitter 기반 AST 코드 압축, fact manifest 생성 |
 | `src/ccim/compress/trigger.py` | 압축 후보 선택과 skip reason 진단 |
 | `src/ccim/compress/structured_outputs.py` | ToolResult dedupe와 구조화 출력 축약 |
-| `src/ccim/reversibility/store.py` | Redis context와 ToolResult 저장소 |
+| `src/ccim/reversibility/store.py` | Redis context, ToolResult, session context index 저장소 |
 | `src/ccim/reversibility/interceptor.py` | `retrieve_original` 처리 |
 | `src/ccim/telemetry/logger.py` | PostgreSQL 요청 telemetry 기록 |
+| `migrations/002_request_operational_metrics.sql` | feature_flags 기반 운영 지표 view |
 | `tools/admin_server.py` | Admin UI 서버 진입점 |
 | `tools/admin_ui/` | Admin UI 정적 파일과 측정 UI |
 | `tools/compare/` | benchmark, measure, task fixture, semantic checker |

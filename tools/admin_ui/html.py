@@ -14,7 +14,7 @@ HTML = r"""
     h1 { font-size: 30px; margin-bottom: 8px; }
     section { background: #fffdf7; border: 1px solid #d8d0bd; border-radius: 14px; padding: 20px; margin: 18px 0; }
     label { display: block; font-weight: 700; margin: 12px 0 4px; }
-    input { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #b8ae99; border-radius: 8px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #b8ae99; border-radius: 8px; background: #fffdf7; }
     button { margin: 8px 8px 8px 0; padding: 10px 14px; border: 0; border-radius: 8px; background: #263f2c; color: white; cursor: pointer; }
     button.secondary { background: #6f5c3d; }
     button.danger { background: #8a2f23; }
@@ -79,13 +79,30 @@ HTML = r"""
   </section>
 
   <section>
+    <h2>Redis contexts</h2>
+    <button class="secondary" onclick="loadRedisContexts()">Refresh contexts</button>
+    <div id="redisNotice" class="notice"></div>
+    <div id="redisSummary" class="summary"></div>
+    <div id="redisContexts" class="details"></div>
+  </section>
+
+  <section>
     <h2>측정</h2>
     <div class="grid">
       <div><label>왼쪽 prefix</label><input id="left" value="u1"></div>
       <div><label>오른쪽 prefix</label><input id="right" value="u2"></div>
     </div>
     <label>조회 범위(분)</label><input id="since" value="120">
+    <label>요청 상세 필터</label>
+    <select id="measureFilter" onchange="if (lastMeasureData) renderMeasureDetails(lastMeasureData)">
+      <option value="all">All requests</option>
+      <option value="compressed">Compressed</option>
+      <option value="retrieve">Retrieve used</option>
+      <option value="guard_blocked">Guard blocked</option>
+      <option value="stream">Stream requested</option>
+    </select>
     <button onclick="runMeasure()">비교 실행</button>
+    <button class="secondary" onclick="exportMeasureReport()">Markdown export</button>
     <button class="secondary" id="measureDiagnosticsToggle" onclick="toggleMeasureDiagnostics()">진단 상세 표시</button>
     <div id="measureNotice" class="notice"></div>
     <div id="measureSummary" class="summary"></div>
@@ -205,6 +222,9 @@ function readableError(err) {
     return text;
   }
 }
+function safeFilenamePart(value) {
+  return String(value || "").trim().replace(/[^0-9A-Za-z가-힣_-]+/g, "-").replace(/^-+|-+$/g, "") || "run";
+}
 function setNotice(id, text, ok=true) {
   const el = document.getElementById(id);
   el.textContent = text || "";
@@ -213,6 +233,7 @@ function setNotice(id, text, ok=true) {
 async function load() {
   const data = await api("/api/settings");
   renderStatus(data.status);
+  await loadRedisContexts(false);
   const box = document.getElementById("settings");
   box.innerHTML = "";
   for (const key of keys) {
@@ -270,6 +291,64 @@ async function saveSettings() {
     setNotice("saveNotice", readableError(err), false);
   }
 }
+async function loadRedisContexts(showNotice=true) {
+  if (showNotice) setNotice("redisNotice", "Redis context index를 불러오는 중...");
+  try {
+    const data = await api("/api/redis-contexts");
+    renderRedisContexts(data);
+    if (data.ok) {
+      setNotice("redisNotice", `${data.session_count} sessions / ${data.context_count} contexts`, true);
+    } else {
+      setNotice("redisNotice", data.message || "Redis context 조회 실패", false);
+    }
+  } catch (err) {
+    setNotice("redisNotice", readableError(err), false);
+  }
+}
+function renderRedisContexts(data) {
+  const summary = document.getElementById("redisSummary");
+  const details = document.getElementById("redisContexts");
+  summary.innerHTML = `<div class="card">
+    <h3>Redis</h3>
+    ${metric("URL", data.url || "-")}
+    ${metric("Sessions", fmt(data.session_count || 0))}
+    ${metric("Contexts", fmt(data.context_count || 0))}
+    ${metric("Memory est.", formatBytes(data.memory_bytes_est || 0))}
+    ${metric("Min TTL", formatTtl(data.min_ttl_seconds))}
+  </div>`;
+  const rows = [];
+  for (const session of data.sessions || []) {
+    for (const ctx of session.contexts || []) {
+      rows.push({session, ctx});
+    }
+  }
+  if (!rows.length) {
+    details.innerHTML = "";
+    return;
+  }
+  details.innerHTML = `<table>
+    <thead><tr>
+      <th>Session</th><th>Context</th><th>Language</th><th>Symbol</th><th>Path</th><th>Lines</th><th>Chars</th><th>Memory</th><th>TTL</th><th>Created</th>
+    </tr></thead>
+    <tbody>${rows.map(redisContextRow).join("")}</tbody>
+  </table>`;
+}
+function redisContextRow(item) {
+  const ctx = item.ctx;
+  const lines = ctx.original_lines ? ctx.original_lines.join("-") : "-";
+  return `<tr>
+    <td>${escapeHtml(item.session.session_id)}</td>
+    <td>${escapeHtml(ctx.context_id)}</td>
+    <td>${escapeHtml(ctx.language || "-")}</td>
+    <td>${escapeHtml(ctx.symbol_name || "-")}</td>
+    <td class="diagnostic">${escapeHtml(ctx.source_path || "-")}</td>
+    <td>${escapeHtml(lines)}</td>
+    <td>${fmt(ctx.original_chars || 0)}</td>
+    <td>${escapeHtml(formatBytes(ctx.memory_bytes_est || 0))}</td>
+    <td>${escapeHtml(formatTtl(ctx.ttl_seconds))}</td>
+    <td>${escapeHtml(formatTime(ctx.created_at))}</td>
+  </tr>`;
+}
 async function runMeasure() {
   setNotice("measureNotice", "측정 데이터를 불러오는 중...");
   document.getElementById("measureSummary").innerHTML = "";
@@ -288,6 +367,35 @@ async function runMeasure() {
     lastMeasureData = data;
     renderMeasure(data);
     setNotice("measureNotice", `최근 ${data.since}분 동안의 요청 ${data.left.summary.requests + data.right.summary.requests}개를 불러왔습니다.`, true);
+  } catch (err) {
+    setNotice("measureNotice", readableError(err), false);
+  }
+}
+async function exportMeasureReport() {
+  setNotice("measureNotice", "Markdown report를 생성하는 중...");
+  try {
+    const text = await api("/api/measure-report", {
+      method: "POST",
+      body: JSON.stringify({
+        left: document.getElementById("left").value,
+        right: document.getElementById("right").value,
+        since: Number(document.getElementById("since").value || "120"),
+        verbose: true
+      }),
+      headers: {"Accept": "text/markdown"}
+    });
+    const blob = new Blob([text], {type: "text/markdown;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const left = safeFilenamePart(document.getElementById("left").value);
+    const right = safeFilenamePart(document.getElementById("right").value);
+    link.download = `ccim-report-${left}-vs-${right}-${document.getElementById("since").value || "120"}m.md`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setNotice("measureNotice", "Markdown report를 생성했습니다.", true);
   } catch (err) {
     setNotice("measureNotice", readableError(err), false);
   }
@@ -322,6 +430,10 @@ function summaryCard(series) {
     ${metric("출력", fmt(s.total_output))}
     ${metric("전송 합계", fmt(s.total_tokens_sent))}
     ${metric("절감", s.saved_input_pct === null ? "N/A" : `${fmt(s.saved_input_tokens)} (${s.saved_input_pct}%)`)}
+    ${metric("순절감 추정", fmt(s.net_saved_input_tokens_est))}
+    ${metric("Retrieve 결과", `${fmt(s.retrieve_result_tokens_est)} t`)}
+    ${metric("Retrieve cache", `${fmt(s.retrieve_cache_hits)} hit / ${fmt(s.retrieve_store_fetches)} fetch`)}
+    ${metric("Guard 차단", fmt(s.guard_blocks))}
     ${metric("평균 지연", `${fmt(s.avg_latency_ms)} ms`)}
   </div>`;
 }
@@ -379,10 +491,12 @@ function renderMeasureChart(data) {
 function renderMeasureDetails(data) {
   const rows = [];
   for (const side of [data.left, data.right]) {
-    side.requests.forEach((r, i) => rows.push({label: side.label, index: i + 1, row: r}));
+    side.requests.forEach((r, i) => {
+      if (passesMeasureFilter(r)) rows.push({label: side.label, index: i + 1, row: r});
+    });
   }
   if (!rows.length) {
-    document.getElementById("measureDetails").innerHTML = "";
+    document.getElementById("measureDetails").innerHTML = "<p class=\"small\">No matching requests.</p>";
     return;
   }
   const diagnosticHeaders = showMeasureDiagnostics
@@ -424,9 +538,33 @@ function totalTokens(row) {
 function fmt(value) {
   return Number(value || 0).toLocaleString();
 }
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MiB`;
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  return `${fmt(size)} B`;
+}
+function formatTtl(value) {
+  if (value === null || value === undefined) return "N/A";
+  const ttl = Number(value);
+  if (ttl === -1) return "no expiry";
+  if (ttl < 0) return "expired";
+  if (ttl >= 3600) return `${Math.floor(ttl / 3600)}h ${Math.floor((ttl % 3600) / 60)}m`;
+  if (ttl >= 60) return `${Math.floor(ttl / 60)}m ${ttl % 60}s`;
+  return `${ttl}s`;
+}
 function formatTime(value) {
   if (!value) return "?";
   return String(value).replace("T", " ").slice(0, 19);
+}
+function passesMeasureFilter(row) {
+  const filter = document.getElementById("measureFilter")?.value || "all";
+  const flags = row.feature_flags || {};
+  if (filter === "compressed") return Number(flags.compress_context_ids || 0) > 0;
+  if (filter === "retrieve") return Number(row.retrieve_original_calls || flags.retrieve_original_tool_uses || 0) > 0;
+  if (filter === "guard_blocked") return flags.current_turn_write_guard_blocked === true;
+  if (filter === "stream") return flags.stream_requested === true || Boolean(flags.stream_response_mode);
+  return true;
 }
 function compressDetail(flags) {
   if (!flags || !Object.keys(flags).length) return "-";

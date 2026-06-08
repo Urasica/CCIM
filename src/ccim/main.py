@@ -266,6 +266,24 @@ class _NullRedis:
     async def delete(self, *names: str) -> None:
         pass
 
+    async def sadd(self, name: str, *values: str) -> None:
+        pass
+
+    async def srem(self, name: str, *values: str) -> None:
+        pass
+
+    async def smembers(self, name: str) -> set[str]:
+        return set()
+
+    async def expire(self, name: str, time: int) -> None:
+        pass
+
+    async def ttl(self, name: str) -> int:
+        return -2
+
+    async def memory_usage(self, name: str) -> None:
+        return None
+
 
 class _NullLogger:
     """Telemetry가 비활성화된 경우 사용하는 no-op logger."""

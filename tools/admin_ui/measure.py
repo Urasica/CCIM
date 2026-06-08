@@ -75,6 +75,23 @@ def summarize_measure_requests(rows: list[dict[str, Any]]) -> dict[str, Any]:
     total_sent = total_compressed + total_output
     latencies = [row.get("latency_ms") or 0 for row in rows if row.get("latency_ms") is not None]
     saved = total_original - total_compressed
+    flags = [row.get("feature_flags") or {} for row in rows]
+    retrieve_result_tokens = sum(
+        int(flag.get("retrieve_original_result_tokens_est") or 0) for flag in flags
+    )
+    retrieve_arg_tokens = sum(
+        int(flag.get("retrieve_original_tool_use_tokens_est") or 0) for flag in flags
+    )
+    retrieve_cache_hits = sum(
+        int(flag.get("retrieve_original_cache_hits") or 0) for flag in flags
+    )
+    retrieve_store_fetches = sum(
+        int(flag.get("retrieve_original_store_fetches") or 0) for flag in flags
+    )
+    guard_blocks = sum(
+        1 for flag in flags if flag.get("current_turn_write_guard_blocked") is True
+    )
+    compressed_requests = sum(1 for flag in flags if int(flag.get("compress_context_ids") or 0) > 0)
     return {
         "requests": requests,
         "total_input_original": total_original,
@@ -83,9 +100,145 @@ def summarize_measure_requests(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "total_tokens_sent": total_sent,
         "saved_input_tokens": saved,
         "saved_input_pct": round(saved / total_original * 100, 1) if total_original else None,
+        "net_saved_input_tokens_est": saved - retrieve_result_tokens - retrieve_arg_tokens,
         "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else 0,
         "retrieve_original_calls": sum(row.get("retrieve_original_calls") or 0 for row in rows),
+        "retrieve_result_tokens_est": retrieve_result_tokens,
+        "retrieve_tool_use_tokens_est": retrieve_arg_tokens,
+        "retrieve_cache_hits": retrieve_cache_hits,
+        "retrieve_store_fetches": retrieve_store_fetches,
+        "guard_blocks": guard_blocks,
+        "compressed_requests": compressed_requests,
     }
+
+
+def measure_payload(left: str, right: str, since: int) -> dict[str, Any]:
+    left_rows = fetch_measure_requests(left, since)
+    right_rows = fetch_measure_requests(right, since)
+    return {
+        "left": {
+            "label": left,
+            "summary": summarize_measure_requests(left_rows),
+            "requests": left_rows,
+        },
+        "right": {
+            "label": right,
+            "summary": summarize_measure_requests(right_rows),
+            "requests": right_rows,
+        },
+        "since": since,
+    }
+
+
+def render_markdown_report(data: dict[str, Any]) -> str:
+    left = data["left"]
+    right = data["right"]
+    since = data["since"]
+    lines = [
+        "# CCIM Benchmark Report",
+        "",
+        f"- Window: last {since} minutes",
+        f"- Left: `{left['label']}`",
+        f"- Right: `{right['label']}`",
+        "",
+        "## Summary",
+        "",
+        "| Metric | Left | Right | Delta |",
+        "|---|---:|---:|---:|",
+    ]
+    for key, label in [
+        ("requests", "Requests"),
+        ("total_input_original", "Input original"),
+        ("total_input_compressed", "Input sent"),
+        ("total_output", "Output"),
+        ("total_tokens_sent", "Total sent+output"),
+        ("saved_input_tokens", "Input saved"),
+        ("net_saved_input_tokens_est", "Net saved est."),
+        ("retrieve_original_calls", "Retrieve calls"),
+        ("retrieve_result_tokens_est", "Retrieve result tokens est."),
+        ("retrieve_cache_hits", "Retrieve cache hits"),
+        ("retrieve_store_fetches", "Retrieve store fetches"),
+        ("guard_blocks", "Guard blocks"),
+        ("avg_latency_ms", "Avg latency ms"),
+    ]:
+        left_value = left["summary"].get(key)
+        right_value = right["summary"].get(key)
+        lines.append(
+            f"| {label} | {_md_num(left_value)} | {_md_num(right_value)} | "
+            f"{_md_delta(left_value, right_value)} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Request Detail",
+            "",
+            "| Run | # | Time | Original | Sent | Output | Latency ms | Retrieve | Flags |",
+            "|---|---:|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for series in (left, right):
+        for idx, row in enumerate(series["requests"], start=1):
+            flags = row.get("feature_flags") or {}
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _md_escape(series["label"]),
+                        str(idx),
+                        _md_escape(str(row.get("created_at") or "")[:19]),
+                        _md_num(row.get("tokens_input_original")),
+                        _md_num(row.get("tokens_input_compressed")),
+                        _md_num(row.get("tokens_output")),
+                        _md_num(row.get("latency_ms")),
+                        _md_num(row.get("retrieve_original_calls")),
+                        _md_escape(_compact_flags(flags)),
+                    ]
+                )
+                + " |"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _md_num(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    if isinstance(value, float):
+        return f"{value:,.1f}"
+    if isinstance(value, int):
+        return f"{value:,}"
+    return _md_escape(str(value))
+
+
+def _md_delta(left: Any, right: Any) -> str:
+    if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+        return "N/A"
+    delta = right - left
+    sign = "+" if delta > 0 else ""
+    if isinstance(delta, float):
+        return f"{sign}{delta:,.1f}"
+    return f"{sign}{delta:,}"
+
+
+def _md_escape(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
+
+
+def _compact_flags(flags: dict[str, Any]) -> str:
+    parts = []
+    skip = flags.get("compress_skip_reason")
+    if skip:
+        parts.append(f"skip={skip}")
+    if flags.get("compress_context_ids"):
+        parts.append(f"ctx={flags.get('compress_context_ids')}")
+    if flags.get("retrieve_original_result_tokens_est"):
+        parts.append(f"ret_t={flags.get('retrieve_original_result_tokens_est')}")
+    if flags.get("current_turn_write_guard_blocked") is True:
+        parts.append(f"guard={flags.get('current_turn_write_guard_block_reason') or 'blocked'}")
+    if flags.get("stream_response_mode"):
+        parts.append(f"stream={flags.get('stream_response_mode')}")
+    return " ".join(parts) or "-"
 
 
 def run_measure_compare(left: str, right: str, since: int, verbose: bool) -> str:

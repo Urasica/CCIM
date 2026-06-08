@@ -25,11 +25,15 @@ class _FakeRedis:
 
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
+        self.sets: dict[str, set[str]] = {}
+        self.ttls: dict[str, int] = {}
         self.last_ex: int | None = None
 
     async def set(self, name: str, value: str, ex: int | None = None) -> bool:
         self.store[name] = value
         self.last_ex = ex
+        if ex is not None:
+            self.ttls[name] = ex
         return True
 
     async def get(self, name: str):
@@ -41,7 +45,40 @@ class _FakeRedis:
             if k in self.store:
                 del self.store[k]
                 n += 1
+            self.sets.pop(k, None)
+            self.ttls.pop(k, None)
         return n
+
+    async def sadd(self, name: str, *values: str) -> int:
+        bucket = self.sets.setdefault(name, set())
+        before = len(bucket)
+        bucket.update(values)
+        return len(bucket) - before
+
+    async def srem(self, name: str, *values: str) -> int:
+        bucket = self.sets.setdefault(name, set())
+        before = len(bucket)
+        for value in values:
+            bucket.discard(value)
+        return before - len(bucket)
+
+    async def smembers(self, name: str) -> set[str]:
+        return self.sets.get(name, set())
+
+    async def expire(self, name: str, time: int) -> bool:
+        self.ttls[name] = time
+        return True
+
+    async def ttl(self, name: str) -> int:
+        return self.ttls.get(name, -2 if name not in self.store and name not in self.sets else -1)
+
+    async def memory_usage(self, name: str) -> int | None:
+        value = self.store.get(name)
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return len(value)
+        return len(value.encode("utf-8"))
 
 
 def _record(session_id: str = "s1", context_id: str = "001") -> ContextRecord:
@@ -90,6 +127,8 @@ async def test_store_put_writes_with_ttl() -> None:
     await store.put(_record())
     assert "ctx:s1:001" in redis.store
     assert redis.last_ex == 300
+    assert redis.sets["idx:ctx:s1"] == {"001"}
+    assert redis.ttls["idx:ctx:s1"] == 300
 
 
 async def test_store_get_returns_record() -> None:
@@ -126,6 +165,28 @@ async def test_store_delete() -> None:
     await store.put(_record())
     await store.delete("s1", "001")
     assert await store.get("s1", "001") is None
+    assert redis.sets["idx:ctx:s1"] == set()
+
+
+async def test_store_list_contexts_returns_operational_metadata() -> None:
+    redis = _FakeRedis()
+    store = ReversibilityStore(redis, ttl_seconds=300)
+    await store.put(_metadata_record())
+
+    contexts = await store.list_contexts("s1")
+
+    assert len(contexts) == 1
+    entry = contexts[0]
+    assert entry.session_id == "s1"
+    assert entry.context_id == "meta001"
+    assert entry.redis_key == "ctx:s1:meta001"
+    assert entry.language == "python"
+    assert entry.source_path == "tools/compare/large_reference.py"
+    assert entry.symbol_name == "transform_batch_001"
+    assert entry.original_lines == (10, 11)
+    assert entry.original_chars == len("    value = 1\n    return value\n")
+    assert entry.ttl_seconds == 300
+    assert entry.memory_bytes_est is not None
 
 
 async def test_store_get_line_mapping_only() -> None:

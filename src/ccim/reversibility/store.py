@@ -49,6 +49,27 @@ class _RedisLike(Protocol):
     async def set(self, name: str, value: str, ex: int | None = ...) -> Any: ...
     async def get(self, name: str) -> Any: ...
     async def delete(self, *names: str) -> Any: ...
+    async def sadd(self, name: str, *values: str) -> Any: ...
+    async def srem(self, name: str, *values: str) -> Any: ...
+    async def smembers(self, name: str) -> Any: ...
+    async def expire(self, name: str, time: int) -> Any: ...
+    async def ttl(self, name: str) -> Any: ...
+    async def memory_usage(self, name: str) -> Any: ...
+
+
+@dataclass
+class ContextStoreEntry:
+    session_id: str
+    context_id: str
+    redis_key: str
+    language: str | None
+    source_path: str | None
+    symbol_name: str | None
+    original_lines: tuple[int, int] | None
+    original_chars: int
+    ttl_seconds: int | None
+    memory_bytes_est: int | None
+    created_at: datetime | None
 
 
 class ReversibilityStore:
@@ -69,6 +90,10 @@ class ReversibilityStore:
     def _tool_key(session_id: str, content_hash: str) -> str:
         return f"tool:{session_id}:{content_hash}"
 
+    @staticmethod
+    def _context_index_key(session_id: str) -> str:
+        return f"idx:ctx:{session_id}"
+
     async def put(self, record: ContextRecord) -> None:
         payload = {
             "original_code": record.original_code,
@@ -85,6 +110,9 @@ class ReversibilityStore:
             json.dumps(payload, ensure_ascii=False),
             ex=self._ttl,
         )
+        index_key = self._context_index_key(record.session_id)
+        await _maybe_call(self._r, "sadd", index_key, record.context_id)
+        await _maybe_call(self._r, "expire", index_key, self._ttl)
 
     async def get(self, session_id: str, context_id: str) -> ContextRecord | None:
         raw = await self._r.get(self._key(session_id, context_id))
@@ -119,6 +147,62 @@ class ReversibilityStore:
 
     async def delete(self, session_id: str, context_id: str) -> None:
         await self._r.delete(self._key(session_id, context_id))
+        await _maybe_call(self._r, "srem", self._context_index_key(session_id), context_id)
+
+    async def list_context_ids(self, session_id: str) -> list[str]:
+        raw_ids = await _maybe_call(self._r, "smembers", self._context_index_key(session_id))
+        if raw_ids is None:
+            return []
+        return sorted(_decode_redis_text(item) for item in raw_ids)
+
+    async def list_contexts(
+        self,
+        session_id: str,
+        *,
+        limit: int | None = None,
+    ) -> list[ContextStoreEntry]:
+        entries = []
+        for context_id in await self.list_context_ids(session_id):
+            key = self._key(session_id, context_id)
+            raw = await self._r.get(key)
+            if raw is None:
+                await _maybe_call(self._r, "srem", self._context_index_key(session_id), context_id)
+                continue
+            text = _decode_redis_text(raw)
+            data = json.loads(text)
+            memory_bytes = await _maybe_call(self._r, "memory_usage", key)
+            ttl_seconds = await _maybe_call(self._r, "ttl", key)
+            entries.append(
+                ContextStoreEntry(
+                    session_id=session_id,
+                    context_id=context_id,
+                    redis_key=key,
+                    language=data.get("language"),
+                    source_path=data.get("source_path"),
+                    symbol_name=data.get("symbol_name"),
+                    original_lines=(
+                        tuple(data["original_lines"])
+                        if isinstance(data.get("original_lines"), list)
+                        and len(data["original_lines"]) == 2
+                        else None
+                    ),
+                    original_chars=len(data.get("original_code") or ""),
+                    ttl_seconds=ttl_seconds if isinstance(ttl_seconds, int) else None,
+                    memory_bytes_est=(
+                        memory_bytes if isinstance(memory_bytes, int) else len(text.encode("utf-8"))
+                    ),
+                    created_at=(
+                        datetime.fromisoformat(data["created_at"])
+                        if data.get("created_at")
+                        else None
+                    ),
+                )
+            )
+        entries.sort(
+            key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
+        return entries[:limit] if limit is not None else entries
 
     async def put_tool_result(self, record: ToolResultRecord) -> None:
         payload = {
@@ -150,3 +234,16 @@ class ReversibilityStore:
             metadata=data.get("metadata", {}),
             created_at=datetime.fromisoformat(data["created_at"]),
         )
+
+
+def _decode_redis_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+async def _maybe_call(target: Any, method_name: str, *args: Any) -> Any:
+    method = getattr(target, method_name, None)
+    if method is None:
+        return None
+    return await method(*args)

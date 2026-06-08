@@ -331,6 +331,14 @@ Payload:
 }
 ```
 
+Context index key:
+
+```text
+idx:ctx:{session_id}
+```
+
+Context 저장 시 context id를 session별 Redis set에 추가하고, index key에도 같은 TTL을 부여한다. Admin UI는 이 index를 기준으로 session별 context 목록, TTL 잔여 시간, Redis memory estimate, source path, symbol, 원문 line 범위를 조회한다. TTL이 지난 context는 조회 중 index에서 정리된다.
+
 TTL은 `CCIM_REDIS_TTL_SECONDS`로 제어한다. 기본값은 3600초다.
 
 ## 7. retrieve_original
@@ -442,6 +450,21 @@ PostgreSQL `requests` 테이블:
 | `write_remaps` | write remap 횟수 |
 | `feature_flags` | 압축/guard 상세 진단 JSON |
 | `version` | CCIM version |
+
+운영 지표 view:
+
+```text
+request_operational_metrics
+```
+
+`migrations/002_request_operational_metrics.sql`은 `feature_flags` JSONB에서 자주 비교하는 값을 typed column으로 노출한다. runtime logger는 기존 `requests` insert path를 유지하고, 분석/benchmark 쿼리에서 다음 필드를 직접 사용할 수 있게 한다.
+
+```text
+compression_mode, saved_input_tokens_est, retrieve_tool_use_tokens_est,
+retrieve_result_tokens_est, retrieve_cache_hits, retrieve_store_fetches,
+guard_mode, guard_blocked, guard_block_reason, stream_requested,
+stream_response_mode, benchmark_run_id
+```
 
 주요 `feature_flags`:
 
@@ -577,12 +600,16 @@ Admin UI 기능:
 - boolean 설정 토글
 - CCIM start/stop/restart
 - Redis/PostgreSQL/CCIM HTTP 상태 표시
+- Redis context index, TTL, memory estimate, source path, symbol 표시
 - 8081 포트 점유 PID 표시
 - 최신 CCIM log tail 표시
 - Measure summary 카드
 - 요청별 원본 입력/압축 후 입력 그래프
+- benchmark markdown report export
+- Measure 요청 상세 필터: all, compressed, retrieve, guard blocked, stream
 - Request details 기본 컬럼과 진단 상세 토글
 - 진단 상세의 Guard 컬럼에서 guard mode, reason, target path, 필요/retrieve/검증 context 수 표시
+- 진단 상세의 Retrieve 컬럼에서 호출 수, bulk 여부, fetch/cache/hit/miss, result/tool-use token estimate 표시
 - 진단 상세의 Compression detail에서 history context 수와 current-turn context 수를 분리 표시
 
 Measure Request details 기본 컬럼:
@@ -594,7 +621,7 @@ Run, #, Time, Original, Sent, Output, Total, Saved, Latency
 `진단 상세 표시`를 누르면 다음 컬럼이 추가된다.
 
 ```text
-Guard, Metadata, Compression detail
+Guard, Retrieve, Metadata, Compression detail
 ```
 
 그래프:
@@ -796,6 +823,6 @@ uv run python tools/compare/check_task2_semantics.py tools/compare/workspace/q2
 - Admin UI Measure에서 guard/metadata 전용 필터를 추가한다.
 - ToolResult dedupe hit/miss와 구조화 출력 요약 효과를 별도 그래프로 분리한다.
 - write guard 메시지에서 retrieve해야 할 context를 더 짧고 명확하게 안내한다.
-- direct/대형 컨텍스트 테스트 측정 결과를 자동으로 markdown report로 내보낸다.
+- markdown report를 파일 저장뿐 아니라 benchmark run id와 연결해 보존한다.
 - relationship fact 추출을 Python 외 언어로 확장한다.
 - semantic checker를 task2 외 fixture에도 적용할 수 있도록 rule set을 분리한다.
