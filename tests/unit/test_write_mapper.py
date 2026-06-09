@@ -7,7 +7,7 @@ is exercised.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ccim.reversibility.store import ContextRecord, ReversibilityStore
 from ccim.write_mapper.mapper import (
@@ -26,7 +26,7 @@ class _FakeRedis:
         self.store[name] = value
         return True
 
-    async def get(self, name: str):  # noqa: ANN201
+    async def get(self, name: str):
         return self.store.get(name)
 
     async def delete(self, *names: str) -> int:
@@ -59,7 +59,7 @@ async def _store_with_mapping(
                 original_code="<body>",
                 language="python",
                 line_mapping=line_mapping,
-                created_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
+                created_at=datetime(2026, 4, 28, tzinfo=UTC),
             )
         )
     return store

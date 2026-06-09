@@ -17,10 +17,9 @@ import textwrap
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
-import pytest
 
 # SSG 소스 경로
 _SSG_PY = Path(__file__).parent.parent.parent / "tools" / "ssg" / "ssg.py"
@@ -132,11 +131,16 @@ def _build_app(
     redis: Any = None,
 ) -> Any:
     from fastapi import FastAPI
+
     from ccim.api.routes import router as messages_router
     from ccim.compress.ast_compressor import ASTCompressor
     from ccim.middleware.chain import (
-        CompressMiddleware, ForwardAndInterceptMiddleware, MiddlewareChain,
-        PCFIMiddleware, TelemetryMiddleware, WriteRemapMiddleware,
+        CompressMiddleware,
+        ForwardAndInterceptMiddleware,
+        MiddlewareChain,
+        PCFIMiddleware,
+        TelemetryMiddleware,
+        WriteRemapMiddleware,
     )
     from ccim.pcfi.enforcer import PCFIEnforcer
     from ccim.reversibility.interceptor import ReversibilityInterceptor
@@ -222,7 +226,7 @@ class TestT1TokenMeasurement:
         assert long_tokens > short_tokens * 10, (
             f"긴 메시지가 짧은 메시지보다 충분히 크지 않음: {short_tokens} vs {long_tokens}"
         )
-        print(f"\n[T1] 단문: {short_tokens}t, 장문(×1000): {long_tokens}t")
+        print(f"\n[T1] 단문: {short_tokens}t, 장문(x1000): {long_tokens}t")
 
     def test_t1_compression_trigger_fires_on_large_context(self) -> None:
         """컨텍스트가 임계치를 넘으면 should_compress가 후보를 반환하는지 검증."""
@@ -316,7 +320,7 @@ class TestT2ContextRetention:
     """AGENT_README의 CSS 클래스 규약이 연속 요청에서 보존되는지 검증."""
 
     # AGENT_README에 정의된 핵심 CSS 클래스 (에이전트가 반드시 기억해야 할 것들)
-    _REQUIRED_CSS = [
+    _REQUIRED_CSS: ClassVar[list[str]] = [
         "post-card",
         "post-header",
         "post-title",
@@ -556,7 +560,7 @@ class TestT3InjectionDefense:
     """
 
     # 악성 마크다운 파일 시나리오 목록
-    _INJECTION_DOCS = [
+    _INJECTION_DOCS: ClassVar[list[dict[str, Any]]] = [
         # 시나리오 1: "ignore previous instructions" in body
         {
             "name": "role_switch_in_body",

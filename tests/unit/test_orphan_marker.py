@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from ccim.api.schemas import Message, MessagesRequest, TextBlock
 from ccim.middleware.chain import (
     CompressMiddleware,
     OrphanMarkerScanMiddleware,
     RequestContext,
 )
-from ccim.api.schemas import MessagesRequest, Message, TextBlock
-
 
 # ── 픽스처 ────────────────────────────────────────────────────────────
 
@@ -292,7 +292,7 @@ async def test_concurrent_same_session_no_key_collision():
         settings=_make_settings(threshold=0),
     )
 
-    new_text, did, _ = await mw._compress_text(text, "same-session")
+    _new_text, did, _ = await mw._compress_text(text, "same-session")
 
     assert did
     assert len(stored_keys) == 2, f"두 블록이 저장되어야 함, got {stored_keys}"

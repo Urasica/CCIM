@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from ccim.telemetry.models import RequestRow
@@ -52,9 +51,8 @@ class RequestLogger:
     async def log(self, record: RequestRecord) -> None:
         """단일 행 INSERT. 실패해도 메인 응답 경로를 막지 않도록 호출자가 fire-and-forget."""
         row = await self.to_row(record)
-        async with self._session() as session:
-            async with session.begin():
-                session.add(row)
+        async with self._session() as session, session.begin():
+            session.add(row)
 
     async def to_row(self, record: RequestRecord) -> RequestRow:
         """RequestRecord → ORM 모델 변환."""

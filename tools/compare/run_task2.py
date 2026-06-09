@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE = ROOT / "tools" / "compare" / "workspace" / "task2"
 REFERENCE = ROOT / "tools" / "compare" / "large_reference.py"
@@ -21,7 +20,7 @@ def main() -> None:
             [
                 "## Task2 - large_reference.py 읽기 완료",
                 "",
-                f"- reference: tools/compare/large_reference.py",
+                "- reference: tools/compare/large_reference.py",
                 f"- lines: {lines}",
                 "- purpose: compression-rate check",
                 "",

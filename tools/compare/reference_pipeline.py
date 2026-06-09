@@ -17,11 +17,12 @@ and modifies only the copy. Do not use this file as application code.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from statistics import mean
-from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import Any
 
 
 class Severity(str, Enum):
@@ -51,7 +52,7 @@ class Event:
     value: float
     tags: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def get(self, key: str, default: Any = None) -> Any:
         """Return a field or metadata value by dotted key."""
@@ -80,7 +81,7 @@ class Decision:
     def ok(self) -> bool:
         return self.action == Action.ACCEPT
 
-    def with_reason(self, reason: str) -> "Decision":
+    def with_reason(self, reason: str) -> Decision:
         return Decision(
             event_id=self.event_id,
             action=self.action,
@@ -139,10 +140,7 @@ class Normalizer:
     def _coerce_tags(self, value: Any) -> tuple[str, ...]:
         if value is None:
             return ()
-        if isinstance(value, str):
-            parts = value.split(",")
-        else:
-            parts = list(value)
+        parts = value.split(",") if isinstance(value, str) else list(value)
         cleaned = []
         for item in parts:
             tag = str(item).strip().lower()
@@ -157,11 +155,11 @@ class Normalizer:
 
     def _coerce_datetime(self, value: Any) -> datetime:
         if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
         if isinstance(value, str) and value:
             text = value.replace("Z", "+00:00")
             return datetime.fromisoformat(text)
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 class ConditionEvaluator:

@@ -206,9 +206,7 @@ def openai_to_anthropic_response(resp: dict[str, Any], *, model: str) -> dict[st
 
 
 def encode_sse_event(event_type: str, data: dict[str, Any]) -> bytes:
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode(
-        "utf-8"
-    )
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
 async def openai_sse_to_anthropic(

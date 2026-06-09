@@ -23,7 +23,7 @@ from ccim.api.schemas import (
 )
 
 # Anthropic Messages API의 메시지 1건당 평균 메타 오버헤드 (role 마커 등).
-# 정확한 값은 모델별로 다르나 ~3–5 토큰 수준이라 4로 고정.
+# 정확한 값은 모델별로 다르나 ~3-5 토큰 수준이라 4로 고정.
 _OVERHEAD_PER_MESSAGE = 4
 _OVERHEAD_PER_TOOL_USE = 8
 

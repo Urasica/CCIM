@@ -24,7 +24,6 @@ from ccim.api.schemas import Message, TextBlock, ToolResultBlock
 from ccim.pcfi.compartments import Compartments
 from ccim.pcfi.llama_guard import GuardClient
 
-
 logger = logging.getLogger(__name__)
 
 

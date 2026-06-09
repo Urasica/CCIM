@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
+from opentelemetry.trace import Tracer
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ def _setup(app: FastAPI, *, service_name: str, exporter_endpoint: str) -> None:
     )
 
 
-def get_tracer(name: str = "ccim") -> "trace.Tracer":  # type: ignore[name-defined]
+def get_tracer(name: str = "ccim") -> Tracer:
     """모듈에서 직접 tracer를 얻는 헬퍼."""
     from opentelemetry import trace
 

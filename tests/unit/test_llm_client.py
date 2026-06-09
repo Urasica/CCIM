@@ -28,7 +28,6 @@ from ccim.llm.translate import (
     openai_to_anthropic_response,
 )
 
-
 # ----- Pure translation: Anthropic -> OpenAI request -------------------
 
 
@@ -480,9 +479,11 @@ async def test_openai_complete_rate_limit_exhausted_raises_429() -> None:
         messages=[Message(role="user", content="hi")],
     )
 
-    with patch("ccim.llm.client.asyncio.sleep", new=AsyncMock()) as sleep_mock:
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            await client.complete(req)
+    with (
+        patch("ccim.llm.client.asyncio.sleep", new=AsyncMock()) as sleep_mock,
+        pytest.raises(httpx.HTTPStatusError) as exc_info,
+    ):
+        await client.complete(req)
 
     assert exc_info.value.response.status_code == 429
     sleep_mock.assert_awaited_once_with(1.5)

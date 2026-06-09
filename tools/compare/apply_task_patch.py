@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE = ROOT / "tools" / "compare" / "workspace" / "current"
 TARGET = WORKSPACE / "reference_pipeline_patched.py"

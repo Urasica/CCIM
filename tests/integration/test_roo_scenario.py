@@ -23,10 +23,8 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-import pytest
 
 from ccim.api.schemas import MessagesRequest
-
 
 # ─────────────────────────────────────────────────────────────────────
 # 공유 픽스처 / 헬퍼
@@ -199,7 +197,7 @@ async def test_s1_single_file_read_roundtrip() -> None:
         # 2nd: tool result 받은 후 최종 답변
         _text_resp("app.py에는 FastAPI 앱이 있습니다."),
     ]
-    async with _client_for(responses)[0] as c:
+    async with _client_for(responses)[0]:
         stub = _CapturingStub(responses)
         app = _build_test_app(stub)
         async with httpx.AsyncClient(
@@ -415,11 +413,16 @@ async def test_s3_model_override_in_upstream_request() -> None:
 
     # model_override를 명시적으로 지정한 미들웨어로 앱 구성
     from fastapi import FastAPI
+
     from ccim.api.routes import router as messages_router
     from ccim.compress.ast_compressor import ASTCompressor
     from ccim.middleware.chain import (
-        CompressMiddleware, ForwardAndInterceptMiddleware, MiddlewareChain,
-        PCFIMiddleware, TelemetryMiddleware, WriteRemapMiddleware,
+        CompressMiddleware,
+        ForwardAndInterceptMiddleware,
+        MiddlewareChain,
+        PCFIMiddleware,
+        TelemetryMiddleware,
+        WriteRemapMiddleware,
     )
     from ccim.pcfi.enforcer import PCFIEnforcer
     from ccim.reversibility.interceptor import ReversibilityInterceptor
@@ -525,20 +528,19 @@ async def test_s5_streaming_with_tool_use_response() -> None:
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
         headers={"x-ccim-session": "s5_stream"},
-    ) as c:
-        async with c.stream(
-            "POST",
-            "/v1/messages",
-            json={
-                "model": "stub",
-                "messages": [{"role": "user", "content": "config.py 읽어줘"}],
-                "max_tokens": 128,
-                "stream": True,
-            },
-        ) as r:
-            assert r.status_code == 200
-            assert "text/event-stream" in r.headers.get("content-type", "")
-            raw = await r.aread()
+    ) as c, c.stream(
+        "POST",
+        "/v1/messages",
+        json={
+            "model": "stub",
+            "messages": [{"role": "user", "content": "config.py 읽어줘"}],
+            "max_tokens": 128,
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        assert "text/event-stream" in r.headers.get("content-type", "")
+        raw = await r.aread()
 
     text = raw.decode("utf-8")
     # SSE 구조 검증
@@ -557,18 +559,17 @@ async def test_s5_streaming_plain_text() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-    ) as c:
-        async with c.stream(
-            "POST",
-            "/v1/messages",
-            json={
-                "model": "stub",
-                "messages": [{"role": "user", "content": "안녕"}],
-                "max_tokens": 32,
-                "stream": True,
-            },
-        ) as r:
-            raw = await r.aread()
+    ) as c, c.stream(
+        "POST",
+        "/v1/messages",
+        json={
+            "model": "stub",
+            "messages": [{"role": "user", "content": "안녕"}],
+            "max_tokens": 32,
+            "stream": True,
+        },
+    ) as r:
+        raw = await r.aread()
 
     text = raw.decode("utf-8")
     assert "message_start" in text

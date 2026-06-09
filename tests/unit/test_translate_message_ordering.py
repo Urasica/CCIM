@@ -20,18 +20,14 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from ccim.api.schemas import (
     Message,
     MessagesRequest,
     TextBlock,
-    ToolDefinition,
     ToolResultBlock,
     ToolUseBlock,
 )
 from ccim.llm.translate import _message_to_openai, anthropic_to_openai_request
-
 
 # ─────────────────────────────────────────────────────────────────────
 # _message_to_openai 단위 케이스
@@ -215,7 +211,7 @@ def test_full_tool_call_sequence_valid() -> None:
 
     # 순서 규칙 검증
     errors = _validate_openai_message_sequence(messages)
-    assert errors == [], f"시퀀스 오류:\n" + "\n".join(errors)
+    assert errors == [], "시퀀스 오류:\n" + "\n".join(errors)
 
     # 내용 검증
     roles = [m["role"] for m in messages]
@@ -251,7 +247,7 @@ def test_multi_tool_call_sequence_valid() -> None:
     messages = body["messages"]
 
     errors = _validate_openai_message_sequence(messages)
-    assert errors == [], f"시퀀스 오류:\n" + "\n".join(errors)
+    assert errors == [], "시퀀스 오류:\n" + "\n".join(errors)
 
     # tool 메시지 두 개 + 그 앞에 assistant 확인
     tool_msgs = [m for m in messages if m["role"] == "tool"]
@@ -300,7 +296,7 @@ def test_two_round_tool_exchange_sequence_valid() -> None:
     messages = body["messages"]
 
     errors = _validate_openai_message_sequence(messages)
-    assert errors == [], f"시퀀스 오류:\n" + "\n".join(errors)
+    assert errors == [], "시퀀스 오류:\n" + "\n".join(errors)
 
     # 마지막이 user 텍스트인지 확인
     assert messages[-1]["role"] == "user"

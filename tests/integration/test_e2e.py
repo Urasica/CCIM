@@ -28,7 +28,6 @@ import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -218,14 +217,13 @@ class TestL1Stub:
         assert body["content"][0]["type"] == "text"
 
     async def test_stream_sse_format(self) -> None:
-        async with self._client() as c:
-            async with c.stream(
-                "POST", "/v1/messages",
-                json=_msg_payload("Hi", stream=True)
-            ) as r:
-                assert r.status_code == 200
-                assert "text/event-stream" in r.headers["content-type"]
-                raw = await r.aread()
+        async with self._client() as c, c.stream(
+            "POST", "/v1/messages",
+            json=_msg_payload("Hi", stream=True)
+        ) as r:
+            assert r.status_code == 200
+            assert "text/event-stream" in r.headers["content-type"]
+            raw = await r.aread()
         text = raw.decode()
         assert "message_start" in text
         assert "message_stop" in text
@@ -377,6 +375,7 @@ class TestL2Infra:
     @pytest.fixture
     async def sqlite_logger(self) -> AsyncIterator[Any]:
         from sqlalchemy.ext.asyncio import create_async_engine
+
         from ccim.telemetry.logger import RequestLogger
         from ccim.telemetry.models import Base
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -402,6 +401,7 @@ class TestL2Infra:
     async def test_telemetry_insert(self, sqlite_logger: Any) -> None:
         from sqlalchemy import select
         from sqlalchemy.ext.asyncio import AsyncSession
+
         from ccim.telemetry.logger import RequestRecord
         from ccim.telemetry.models import RequestRow
         await sqlite_logger.log(RequestRecord(
@@ -521,13 +521,12 @@ class TestL3Ollama:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test", timeout=90.0,
-        ) as c:
-            async with c.stream(
-                "POST", "/v1/messages",
-                json=_msg_payload("Say hi", model=_OLLAMA_MODEL, stream=True),
-            ) as r:
-                assert r.status_code == 200
-                raw = await r.aread()
+        ) as c, c.stream(
+            "POST", "/v1/messages",
+            json=_msg_payload("Say hi", model=_OLLAMA_MODEL, stream=True),
+        ) as r:
+            assert r.status_code == 200
+            raw = await r.aread()
         text = raw.decode()
         print(f"\n[CCIM+Ollama stream] bytes={len(text)}")
         assert "message_start" in text
@@ -587,12 +586,16 @@ class TestL3Ollama:
         ))
 
         from fastapi import FastAPI
+
         from ccim.api.routes import router as messages_router
         from ccim.compress.ast_compressor import ASTCompressor
         from ccim.middleware.chain import (
-            CompressMiddleware, ForwardAndInterceptMiddleware,
-            MiddlewareChain, PCFIMiddleware,
-            TelemetryMiddleware, WriteRemapMiddleware,
+            CompressMiddleware,
+            ForwardAndInterceptMiddleware,
+            MiddlewareChain,
+            PCFIMiddleware,
+            TelemetryMiddleware,
+            WriteRemapMiddleware,
         )
         from ccim.pcfi.enforcer import PCFIEnforcer
         from ccim.write_mapper.mapper import WriteMapper
