@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     # ── Redis
     redis_url: str = Field(default="redis://localhost:6379/0", alias="CCIM_REDIS_URL")
     redis_ttl_seconds: int = Field(default=3600, alias="CCIM_REDIS_TTL_SECONDS")
+    evidence_store_path: str = Field(default="", alias="CCIM_EVIDENCE_STORE_PATH")
 
     # ── PostgreSQL (psycopg3 드라이버 사용 — asyncpg는 Windows Docker에서 WinError 10054 발생)
     database_url: str = Field(

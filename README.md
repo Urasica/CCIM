@@ -228,6 +228,7 @@ Admin UI에서 `CCIM 시작`을 누르면 `uv run ccim` 하위 프로세스가 �
 | `CCIM_LLM_MODEL` | upstream에 전달할 실제 모델명 |
 | `CCIM_LLM_TIMEOUT_S` | upstream 응답 대기 시간 |
 | `CCIM_REDIS_URL` | 압축 원본 저장 Redis |
+| `CCIM_EVIDENCE_STORE_PATH` | Redis 재시작/TTL 만료 후 evidence span을 재적재할 SQLite persistent store 경로. 비우면 비활성화 |
 | `CCIM_DATABASE_URL` | telemetry 저장 PostgreSQL |
 | `CCIM_COMPRESSION_ENABLED` | 전체 압축 스위치 |
 | `CCIM_COMPRESSION_TRIGGER_TOKENS` | history 압축 시작 입력 토큰 |

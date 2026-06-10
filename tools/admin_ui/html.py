@@ -147,6 +147,7 @@ const settingDescriptions = {
   CCIM_LLM_TIMEOUT_S: "Upstream LLM 응답 대기 시간(초)입니다. 긴 테스트에서는 300 이상을 권장합니다.",
   CCIM_LLM_BASE_URL: "OpenAI-compatible endpoint를 쓸 때만 입력합니다. OpenAI 기본 API를 쓰면 비워 둡니다.",
   CCIM_SESSION_PREFIX: "텔레메트리 실행 라벨입니다. A/B 측정 비교 시 서로 다른 prefix를 사용합니다.",
+  CCIM_EVIDENCE_STORE_PATH: "Redis 재시작 후 evidence span을 다시 적재하기 위한 SQLite persistent store 경로입니다. 비워 두면 비활성화됩니다.",
   CCIM_COMPRESSION_ENABLED: "전역 압축 스위치입니다. false면 history/current-turn/dedupe/structured 압축을 모두 건너뜁니다.",
   CCIM_COMPRESSION_TRIGGER_TOKENS: "요청 입력 토큰 추정치가 이 값 이상일 때만 압축을 시작합니다.",
   CCIM_COMPRESSION_TARGET_TOKENS: "후보 선택 목표값입니다. 낮을수록 더 많은 이전 히스토리를 압축 후보로 선택합니다.",

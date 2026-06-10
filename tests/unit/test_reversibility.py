@@ -8,14 +8,23 @@ roundtrip lives under tests/integration/.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from ccim.compress.markers import build_marker, parse_marker
 from ccim.reversibility.interceptor import (
     RETRIEVE_TOOL_NAME,
     ReversibilityInterceptor,
 )
+from ccim.reversibility.persistent import SQLiteEvidenceStore
 from ccim.reversibility.retrieve_tool import RETRIEVE_ORIGINAL_TOOL, build_system_hint
-from ccim.reversibility.store import ContextRecord, ReversibilityStore, ToolResultRecord
+from ccim.reversibility.store import (
+    ContextRecord,
+    EvidenceIdentity,
+    EvidenceSpan,
+    ReversibilityStore,
+    ToolResultRecord,
+    compute_document_hash,
+)
 
 # ----- FakeRedis --------------------------------------------------------
 
@@ -153,6 +162,109 @@ async def test_store_get_returns_context_metadata() -> None:
     assert got.original_lines == (10, 11)
 
 
+async def test_store_roundtrips_evidence_metadata() -> None:
+    redis = _FakeRedis()
+    store = ReversibilityStore(redis, ttl_seconds=300)
+    record = ContextRecord(
+        session_id="s1",
+        context_id="span001",
+        original_code="2026-06-10T10:00:00Z ERROR payment timeout\n",
+        language="text",
+        line_mapping={},
+        document_id="incident-log",
+        document_hash=compute_document_hash("line\r\n"),
+        document_version=2,
+        span_type="log_window",
+        source_kind="log",
+        source_uri="logs/app.log",
+        original_lines=(120, 121),
+        metadata={"level": "ERROR"},
+        created_at=datetime(2026, 6, 10, tzinfo=UTC),
+    )
+
+    await store.put(record)
+    got = await store.get("s1", "span001")
+
+    assert got is not None
+    assert got.document_id == "incident-log"
+    assert got.document_version == 2
+    assert got.span_type == "log_window"
+    assert got.source_kind == "log"
+    assert got.source_uri == "logs/app.log"
+    assert got.metadata == {"level": "ERROR"}
+
+
+async def test_store_list_contexts_includes_evidence_metadata() -> None:
+    redis = _FakeRedis()
+    store = ReversibilityStore(redis, ttl_seconds=300)
+    await store.put(
+        ContextRecord(
+            session_id="s1",
+            context_id="doc001",
+            original_code="## Policy\nCancel before Friday.\n",
+            language="text",
+            line_mapping={},
+            document_id="policy",
+            document_hash=compute_document_hash("policy"),
+            document_version=3,
+            span_type="document_section",
+            source_kind="document",
+            source_uri="policy.md",
+            created_at=datetime(2026, 6, 10, tzinfo=UTC),
+        )
+    )
+
+    entry = (await store.list_contexts("s1"))[0]
+
+    assert entry.document_id == "policy"
+    assert entry.document_version == 3
+    assert entry.span_type == "document_section"
+    assert entry.source_kind == "document"
+    assert entry.source_uri == "policy.md"
+
+
+def test_compute_document_hash_normalizes_newlines() -> None:
+    assert compute_document_hash("a\r\nb\r") == compute_document_hash("a\nb\n")
+
+
+def test_evidence_identity_validates_version() -> None:
+    try:
+        EvidenceIdentity(document_id="doc", document_hash="abc", document_version=0)
+    except ValueError as exc:
+        assert "document_version" in str(exc)
+    else:
+        raise AssertionError("expected invalid version to raise")
+
+
+def test_evidence_span_converts_to_context_record() -> None:
+    span = EvidenceSpan(
+        session_id="s1",
+        document_id="thread",
+        document_hash=compute_document_hash("hello"),
+        document_version=1,
+        span_id="email001",
+        span_type="email_message",
+        source_kind="email",
+        source_uri="thread.eml",
+        original_text="hello",
+        line_start=5,
+        line_end=6,
+        metadata={"sender": "a@example.com"},
+        created_at=datetime(2026, 6, 10, tzinfo=UTC),
+    )
+
+    record = span.to_context_record()
+    roundtrip = record.to_evidence_span()
+
+    assert record.context_id == "email001"
+    assert record.original_code == "hello"
+    assert record.language == "text"
+    assert record.original_lines == (5, 6)
+    assert roundtrip.full_context_id == "s1:email001"
+    assert roundtrip.source_kind == "email"
+    assert roundtrip.metadata == {"sender": "a@example.com"}
+
+
 async def test_store_get_miss_returns_none() -> None:
     redis = _FakeRedis()
     store = ReversibilityStore(redis)
@@ -211,6 +323,65 @@ async def test_store_tool_result_roundtrip() -> None:
     assert got is not None
     assert got.content == "long command output"
     assert got.metadata == {"lines": 1}
+
+
+async def test_sqlite_evidence_store_roundtrip(tmp_path: Path) -> None:
+    persistent = SQLiteEvidenceStore(tmp_path / "evidence.sqlite")
+    record = ContextRecord(
+        session_id="s1",
+        context_id="log001",
+        original_code="ERROR failed\n",
+        language="text",
+        line_mapping={},
+        document_id="log",
+        document_hash=compute_document_hash("ERROR failed\n"),
+        document_version=1,
+        span_type="log_window",
+        source_kind="log",
+        source_uri="app.log",
+        metadata={"component": "api"},
+        created_at=datetime(2026, 6, 10, tzinfo=UTC),
+    )
+
+    await persistent.put_context(record)
+    got = await persistent.get_context("s1", "log001")
+    by_hash = await persistent.get_contexts_by_document_hash(record.document_hash or "")
+
+    assert got is not None
+    assert got.original_code == "ERROR failed\n"
+    assert got.source_kind == "log"
+    assert got.metadata == {"component": "api"}
+    assert [item.context_id for item in by_hash] == ["log001"]
+
+
+async def test_store_get_warms_redis_from_persistent(tmp_path: Path) -> None:
+    persistent = SQLiteEvidenceStore(tmp_path / "evidence.sqlite")
+    record = ContextRecord(
+        session_id="s1",
+        context_id="doc001",
+        original_code="Important paragraph\n",
+        language="text",
+        line_mapping={},
+        document_id="doc",
+        document_hash=compute_document_hash("Important paragraph\n"),
+        document_version=1,
+        span_type="document_section",
+        source_kind="document",
+        source_uri="doc.md",
+        created_at=datetime(2026, 6, 10, tzinfo=UTC),
+    )
+    await persistent.put_context(record)
+
+    redis = _FakeRedis()
+    store = ReversibilityStore(redis, ttl_seconds=300, persistent_store=persistent)
+    got = await store.get("s1", "doc001")
+
+    assert got is not None
+    assert got.original_code == "Important paragraph\n"
+    assert "ctx:s1:doc001" in redis.store
+    assert store.stats.redis_misses == 1
+    assert store.stats.persistent_hits == 1
+    assert store.stats.redis_warm_loads == 1
 
 
 async def test_store_handles_bytes_response() -> None:
@@ -323,6 +494,7 @@ def test_is_retrieve_call() -> None:
 
 def test_retrieve_tool_definition_shape() -> None:
     assert RETRIEVE_ORIGINAL_TOOL["name"] == "retrieve_original"
+    assert "evidence span" in RETRIEVE_ORIGINAL_TOOL["description"]
     schema = RETRIEVE_ORIGINAL_TOOL["input_schema"]
     assert schema["type"] == "object"
     assert {"required": ["context_id"]} in schema["oneOf"]
@@ -335,3 +507,4 @@ def test_build_system_hint_mentions_marker_format() -> None:
     hint = build_system_hint()
     assert "<<CTX_" in hint
     assert "retrieve_original" in hint
+    assert "evidence" in hint

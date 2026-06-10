@@ -33,6 +33,9 @@ class ToolResolution:
 
     content: str
     is_error: bool
+    persistent_store_hits: int = 0
+    persistent_store_misses: int = 0
+    redis_warm_loads: int = 0
 
 
 class ReversibilityInterceptor:
@@ -86,14 +89,26 @@ class ReversibilityInterceptor:
 
         sections: list[str] = []
         any_error = False
+        persistent_store_hits = 0
+        persistent_store_misses = 0
+        redis_warm_loads = 0
         for full_context_id in context_ids:
             resolution = await self._resolve_one(
                 full_context_id,
                 expected_session_id=expected_session_id,
             )
             any_error = any_error or resolution.is_error
+            persistent_store_hits += resolution.persistent_store_hits
+            persistent_store_misses += resolution.persistent_store_misses
+            redis_warm_loads += resolution.redis_warm_loads
             sections.append(f"## {full_context_id}\n{resolution.content}")
-        return ToolResolution(content="\n\n".join(sections), is_error=any_error)
+        return ToolResolution(
+            content="\n\n".join(sections),
+            is_error=any_error,
+            persistent_store_hits=persistent_store_hits,
+            persistent_store_misses=persistent_store_misses,
+            redis_warm_loads=redis_warm_loads,
+        )
 
     @staticmethod
     def _context_ids_from_input(tool_input: dict) -> list[str]:
@@ -132,7 +147,9 @@ class ReversibilityInterceptor:
                 ),
                 is_error=True,
             )
+        before = self._store_stats_snapshot()
         record = await self._store.get(session_id, context_id)
+        delta = self._store_stats_delta(before)
         if record is None:
             self._stats.retrieve_misses += 1
             return ToolResolution(
@@ -141,7 +158,33 @@ class ReversibilityInterceptor:
                     "Do not fabricate the body; ask the user to re-paste the code."
                 ),
                 is_error=True,
+                persistent_store_hits=delta["persistent_hits"],
+                persistent_store_misses=delta["persistent_misses"],
+                redis_warm_loads=delta["redis_warm_loads"],
             )
 
         self._stats.retrieve_hits += 1
-        return ToolResolution(content=record.original_code, is_error=False)
+        return ToolResolution(
+            content=record.original_code,
+            is_error=False,
+            persistent_store_hits=delta["persistent_hits"],
+            persistent_store_misses=delta["persistent_misses"],
+            redis_warm_loads=delta["redis_warm_loads"],
+        )
+
+    def _store_stats_snapshot(self) -> dict[str, int]:
+        stats = getattr(self._store, "stats", None)
+        if stats is None:
+            return {}
+        return {
+            "persistent_hits": int(getattr(stats, "persistent_hits", 0)),
+            "persistent_misses": int(getattr(stats, "persistent_misses", 0)),
+            "redis_warm_loads": int(getattr(stats, "redis_warm_loads", 0)),
+        }
+
+    def _store_stats_delta(self, before: dict[str, int]) -> dict[str, int]:
+        after = self._store_stats_snapshot()
+        return {
+            key: max(0, after.get(key, 0) - before.get(key, 0))
+            for key in ("persistent_hits", "persistent_misses", "redis_warm_loads")
+        }

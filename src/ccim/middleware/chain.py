@@ -1091,6 +1091,11 @@ class ForwardAndInterceptMiddleware:
                 "retrieve_original_result_tokens_est": 0,
                 "retrieve_original_result_chars": 0,
                 "retrieve_original_loop_limit_exceeded": False,
+                "evidence_persistent_store_hit": 0,
+                "evidence_persistent_store_miss": 0,
+                "evidence_reload_hit": 0,
+                "evidence_reload_miss": 0,
+                "evidence_redis_warm_loads": 0,
             }
         )
         retrieve_cache: dict[str, tuple[str, bool]] = {}
@@ -1151,6 +1156,7 @@ class ForwardAndInterceptMiddleware:
                         tool_input,
                         expected_session_id=ctx.session_id,
                     )
+                    self._record_retrieve_resolution_flags(flags, resolution)
                     content_text = resolution.content
                     is_error = resolution.is_error
                     flags["retrieve_original_store_fetches"] += 1
@@ -1173,6 +1179,7 @@ class ForwardAndInterceptMiddleware:
                                 {"context_id": context_id},
                                 expected_session_id=ctx.session_id,
                             )
+                            self._record_retrieve_resolution_flags(flags, resolution)
                             item_content = resolution.content
                             item_error = resolution.is_error
                             retrieve_cache[context_id] = (item_content, item_error)
@@ -1269,6 +1276,17 @@ class ForwardAndInterceptMiddleware:
         if len(resolved) == 1:
             return resolved[0][1]
         return "\n\n".join(f"## {context_id}\n{content}" for context_id, content, _ in resolved)
+
+    @staticmethod
+    def _record_retrieve_resolution_flags(flags: dict[str, Any], resolution: Any) -> None:
+        persistent_hits = int(getattr(resolution, "persistent_store_hits", 0) or 0)
+        persistent_misses = int(getattr(resolution, "persistent_store_misses", 0) or 0)
+        redis_warm_loads = int(getattr(resolution, "redis_warm_loads", 0) or 0)
+        flags["evidence_persistent_store_hit"] += persistent_hits
+        flags["evidence_persistent_store_miss"] += persistent_misses
+        flags["evidence_reload_hit"] += persistent_hits
+        flags["evidence_reload_miss"] += persistent_misses
+        flags["evidence_redis_warm_loads"] += redis_warm_loads
 
 
 class CurrentTurnWriteGuardMiddleware:

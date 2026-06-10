@@ -1483,7 +1483,12 @@ async def test_forward_retrieve_loop() -> None:
 
     interceptor = MagicMock()
     interceptor.handle_tool_use = AsyncMock(
-        return_value=ToolResolution(content="original code", is_error=False)
+        return_value=ToolResolution(
+            content="original code",
+            is_error=False,
+            persistent_store_hits=1,
+            redis_warm_loads=1,
+        )
     )
 
     mw = ForwardAndInterceptMiddleware(llm_client=llm, interceptor=interceptor)
@@ -1499,6 +1504,10 @@ async def test_forward_retrieve_loop() -> None:
     )
     content = ctx.response_json["content"]
     assert any(b.get("text") == "final answer" for b in content if isinstance(b, dict))
+    flags = ctx.extras["feature_flags"]
+    assert flags["evidence_persistent_store_hit"] == 1
+    assert flags["evidence_reload_hit"] == 1
+    assert flags["evidence_redis_warm_loads"] == 1
 
 
 async def test_forward_retrieve_uses_request_local_cache() -> None:

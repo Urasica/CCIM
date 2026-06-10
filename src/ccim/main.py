@@ -121,9 +121,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pcfi_enforcer = PCFIEnforcer(guard=guard, skip_guard_categories=skip_cats)
 
     # Reversibility
+    persistent_store = None
+    if settings.evidence_store_path:
+        try:
+            from ccim.reversibility.persistent import SQLiteEvidenceStore
+
+            persistent_store = SQLiteEvidenceStore(settings.evidence_store_path)
+            logger.info("Evidence persistent store: %s", settings.evidence_store_path)
+        except Exception:
+            logger.warning("Evidence persistent store unavailable", exc_info=True)
     store = ReversibilityStore(
         redis=redis_client if redis_client else _NullRedis(),
         ttl_seconds=settings.redis_ttl_seconds,
+        persistent_store=persistent_store,
     )
     interceptor = ReversibilityInterceptor(store=store)
     mapper = WriteMapper(store=store)

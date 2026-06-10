@@ -11,16 +11,27 @@ from ccim.reversibility.interceptor import (
     ReversibilityInterceptor,
     ToolResolution,
 )
+from ccim.reversibility.persistent import SQLiteEvidenceStore
 from ccim.reversibility.retrieve_tool import RETRIEVE_ORIGINAL_TOOL, build_system_hint
-from ccim.reversibility.store import ContextRecord, ReversibilityStore
+from ccim.reversibility.store import (
+    ContextRecord,
+    EvidenceIdentity,
+    EvidenceSpan,
+    ReversibilityStore,
+    compute_document_hash,
+)
 
 __all__ = [
     "RETRIEVE_ORIGINAL_TOOL",
     "RETRIEVE_TOOL_NAME",
     "ContextRecord",
+    "EvidenceIdentity",
+    "EvidenceSpan",
     "InterceptStats",
     "ReversibilityInterceptor",
     "ReversibilityStore",
+    "SQLiteEvidenceStore",
     "ToolResolution",
     "build_system_hint",
+    "compute_document_hash",
 ]
