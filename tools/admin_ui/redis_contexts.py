@@ -15,6 +15,7 @@ async def context_overview(limit_sessions: int = 20, limit_contexts: int = 200) 
     env = effective_env()
     url = env.get("CCIM_REDIS_URL", "redis://localhost:6379/0")
     ttl_seconds = int(env.get("CCIM_REDIS_TTL_SECONDS") or 3600)
+    evidence_store_path = env.get("CCIM_EVIDENCE_STORE_PATH", "").strip()
     try:
         import redis.asyncio as aioredis
 
@@ -53,6 +54,8 @@ async def context_overview(limit_sessions: int = 20, limit_contexts: int = 200) 
             return {
                 "ok": True,
                 "url": mask_secret_url(url),
+                "evidence_store_enabled": bool(evidence_store_path),
+                "evidence_store_path": evidence_store_path,
                 "session_count": len(session_rows),
                 "context_count": total_contexts,
                 "memory_bytes_est": total_memory,
@@ -65,6 +68,8 @@ async def context_overview(limit_sessions: int = 20, limit_contexts: int = 200) 
         return {
             "ok": False,
             "url": mask_secret_url(url),
+            "evidence_store_enabled": bool(evidence_store_path),
+            "evidence_store_path": evidence_store_path,
             "message": f"{type(exc).__name__}: {exc}",
             "session_count": 0,
             "context_count": 0,
@@ -94,6 +99,12 @@ def _entry_to_dict(entry: Any) -> dict[str, Any]:
         "source_path": entry.source_path,
         "symbol_name": entry.symbol_name,
         "original_lines": list(entry.original_lines) if entry.original_lines else None,
+        "document_id": entry.document_id,
+        "document_hash": entry.document_hash,
+        "document_version": entry.document_version,
+        "span_type": entry.span_type,
+        "source_kind": entry.source_kind,
+        "source_uri": entry.source_uri,
         "original_chars": entry.original_chars,
         "ttl_seconds": entry.ttl_seconds,
         "memory_bytes_est": entry.memory_bytes_est,

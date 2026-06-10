@@ -82,6 +82,13 @@ def _long_unittest_output() -> str:
     return f"{noise}\n\nRan 7 tests in 0.123s\n\nOK\n"
 
 
+def _long_app_log() -> str:
+    return "\n".join(
+        f"2026-06-10T10:{i // 60:02d}:{i % 60:02d}Z ERROR api worker request_id=req-{i} failed timeout"
+        for i in range(120)
+    )
+
+
 async def test_chain_runs_all_stages() -> None:
     m1, m2, m3 = _NoOpMiddleware(), _NoOpMiddleware(), _NoOpMiddleware()
     chain = MiddlewareChain(stages=[m1, m2, m3])
@@ -437,6 +444,87 @@ async def test_compress_replaces_repeated_tool_result_with_reference() -> None:
     assert flags["compress_tool_result_stores"] == 1
     assert flags["compress_tool_result_attempts"] == 2
     assert flags["compress_tool_result_raw_chars_max"] == len(output)
+    assert sentinel.called
+
+
+async def test_compress_tool_result_log_as_evidence_span() -> None:
+    from ccim.reversibility.store import ReversibilityStore
+
+    store = ReversibilityStore(_FakeRedis())
+    mw = _make_compress_mw(
+        store=store,
+        threshold=1,
+    )
+    sentinel = _NoOpMiddleware()
+    chain = MiddlewareChain(stages=[mw, sentinel])
+    ctx = RequestContext(
+        session_id="s-evidence-log",
+        request=MessagesRequest(
+            model="claude-sonnet-4-6",
+            messages=[
+                Message(
+                    role="user",
+                    content=[ToolResultBlock(tool_use_id="tool-log", content=_long_app_log())],
+                ),
+                Message(role="user", content="current request"),
+            ],
+        ),
+    )
+
+    await chain.run(ctx)
+
+    block = ctx.request.messages[0].content[0]
+    assert isinstance(block, ToolResultBlock)
+    assert isinstance(block.content, str)
+    assert "CCIM evidence span: log_window" in block.content
+    assert "<<CTX_s-evidence-log:" in block.content
+    flags = ctx.extras["feature_flags"]
+    assert flags["compress_text_span_contexts"] >= 1
+    assert flags["compress_text_span_successes"] == 1
+    assert flags["compress_text_span_source_kinds"] == ["log"]
+    assert flags["compress_text_span_types"] == ["log_window"]
+    assert flags["compress_history_contexts"] >= 1
+    context_ids = ctx.extras["all_context_ids"]
+    assert context_ids
+    _, stored_context_id = context_ids[0].split(":", 1)
+    record = await store.get("s-evidence-log", stored_context_id)
+    assert record is not None
+    assert record.source_kind == "log"
+    assert record.span_type == "log_window"
+    assert record.document_hash
+    assert "request_id=req-0" in record.original_code
+    assert sentinel.called
+
+
+async def test_compress_message_log_span_does_not_count_as_ast_block() -> None:
+    from ccim.reversibility.store import ReversibilityStore
+
+    store = ReversibilityStore(_FakeRedis())
+    mw = _make_compress_mw(
+        store=store,
+        threshold=1,
+    )
+    sentinel = _NoOpMiddleware()
+    chain = MiddlewareChain(stages=[mw, sentinel])
+    ctx = RequestContext(
+        session_id="s-evidence-message",
+        request=MessagesRequest(
+            model="claude-sonnet-4-6",
+            messages=[
+                Message(role="user", content=_long_app_log()),
+                Message(role="user", content="current request"),
+            ],
+        ),
+    )
+
+    await chain.run(ctx)
+
+    assert isinstance(ctx.request.messages[0].content, str)
+    assert "CCIM evidence span: log_window" in ctx.request.messages[0].content
+    flags = ctx.extras["feature_flags"]
+    assert flags["compress_text_span_contexts"] >= 1
+    assert flags["compress_ast_blocks"] == 0
+    assert flags["compress_history_contexts"] >= 1
     assert sentinel.called
 
 

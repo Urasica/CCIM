@@ -8,6 +8,7 @@ import pytest
 
 from ccim.api.schemas import Message, ToolResultBlock
 from ccim.compress.ast_compressor import ASTCompressor
+from ccim.compress.text_spans import compress_text_spans, is_evidence_text_candidate
 from ccim.compress.trigger import (
     detect_language_from_code,
     detect_language_from_fence,
@@ -378,6 +379,56 @@ def test_has_compressible_content_detects_structured_tool_output() -> None:
     msg = Message(
         role="user",
         content=[ToolResultBlock(tool_use_id="tool-1", content=output)],
+    )
+    assert has_compressible_content(msg)
+
+
+def _long_log() -> str:
+    return "\n".join(
+        f"2026-06-10T10:{i // 60:02d}:{i % 60:02d}Z ERROR api worker request_id=req-{i} failed timeout"
+        for i in range(120)
+    )
+
+
+def _long_markdown() -> str:
+    return (
+        "# Incident summary\n"
+        + "\n".join(f"- event {i}: retry budget exhausted for queue worker" for i in range(80))
+        + "\n\n# Customer impact\n"
+        + "\n".join(f"paragraph {i}: affected checkout session and delayed email" for i in range(80))
+    )
+
+
+def test_text_span_candidate_detects_long_log() -> None:
+    assert is_evidence_text_candidate(_long_log())
+
+
+def test_text_span_compresses_log_windows() -> None:
+    result = compress_text_spans(_long_log(), session_id="s-log", source_path="app.log")
+
+    assert result.blocks
+    assert "<<CTX_s-log:" in result.compressed_text
+    assert "CCIM evidence span: log_window" in result.compressed_text
+    assert result.blocks[0].source_kind == "log"
+    assert result.blocks[0].span_type == "log_window"
+    assert result.blocks[0].source_uri == "app.log"
+    assert "request_id=req-0" in result.blocks[0].original_code
+
+
+def test_text_span_compresses_markdown_sections() -> None:
+    result = compress_text_spans(_long_markdown(), session_id="s-doc", source_path="runbook.md")
+
+    assert len(result.blocks) == 2
+    assert result.blocks[0].source_kind == "document"
+    assert result.blocks[0].span_type == "document_section"
+    assert result.blocks[0].symbol_name == "Incident summary"
+    assert "<<CTX_s-doc:" in result.compressed_text
+
+
+def test_has_compressible_content_detects_evidence_tool_output() -> None:
+    msg = Message(
+        role="user",
+        content=[ToolResultBlock(tool_use_id="tool-1", content=_long_log())],
     )
     assert has_compressible_content(msg)
 

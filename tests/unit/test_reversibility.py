@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ccim.compress.markers import build_marker, parse_marker
+from ccim.reversibility.evidence_guard import EvidenceGuard, EvidenceGuardRequest
 from ccim.reversibility.interceptor import (
     RETRIEVE_TOOL_NAME,
     ReversibilityInterceptor,
@@ -395,6 +396,106 @@ async def test_store_handles_bytes_response() -> None:
     got = await store.get("s1", "001")
     assert got is not None
     assert got.original_code == "def f():\n    return 1\n"
+
+
+# ----- Evidence Guard ---------------------------------------------------
+
+
+async def test_evidence_guard_blocks_before_retrieve() -> None:
+    guard = EvidenceGuard()
+
+    decision = await guard.evaluate(
+        EvidenceGuardRequest(
+            action_type="reply_draft",
+            required_context_ids=["s1:001"],
+            expected_session_id="s1",
+        ),
+        retrieved_contexts={},
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "blocked_no_retrieve"
+    assert decision.missing_context_ids == ["s1:001"]
+    flags = decision.to_feature_flags()
+    assert flags["evidence_guard_blocked"] is True
+    assert flags["evidence_guard_action_type"] == "reply_draft"
+    assert flags["evidence_guard_block_reason"] == "blocked_no_retrieve"
+
+
+async def test_evidence_guard_allows_after_retrieve() -> None:
+    guard = EvidenceGuard()
+
+    decision = await guard.evaluate(
+        EvidenceGuardRequest(
+            action_type="evidence_packet",
+            required_context_ids=["s1:001"],
+            expected_session_id="s1",
+        ),
+        retrieved_contexts={"s1:001": "original evidence text"},
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "allowed_after_retrieve"
+    assert decision.validated_context_ids == ["s1:001"]
+    assert decision.to_feature_flags()["evidence_guard_blocked"] is False
+
+
+async def test_evidence_guard_blocks_version_mismatch() -> None:
+    redis = _FakeRedis()
+    store = ReversibilityStore(redis)
+    await store.put(
+        ContextRecord(
+            session_id="s1",
+            context_id="doc001",
+            original_code="Current policy paragraph\n",
+            language="text",
+            line_mapping={},
+            document_id="policy",
+            document_hash=compute_document_hash("Current policy paragraph\n"),
+            document_version=2,
+            span_type="document_section",
+            source_kind="document",
+            source_uri="policy.md",
+            created_at=datetime(2026, 6, 10, tzinfo=UTC),
+        )
+    )
+    guard = EvidenceGuard(store)
+
+    decision = await guard.evaluate(
+        EvidenceGuardRequest(
+            action_type="final_claim",
+            required_context_ids=["s1:doc001"],
+            expected_session_id="s1",
+            expected_document_versions={"policy": 1},
+        ),
+        retrieved_contexts={"s1:doc001": "Current policy paragraph\n"},
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "blocked_version_mismatch"
+    assert decision.records_checked == 1
+    assert len(decision.version_mismatches) == 1
+    mismatch = decision.version_mismatches[0]
+    assert mismatch.document_id == "policy"
+    assert mismatch.expected_version == 1
+    assert mismatch.actual_version == 2
+
+
+async def test_evidence_guard_blocks_cross_session_context() -> None:
+    guard = EvidenceGuard()
+
+    decision = await guard.evaluate(
+        EvidenceGuardRequest(
+            action_type="ticket_comment",
+            required_context_ids=["s2:001"],
+            expected_session_id="s1",
+        ),
+        retrieved_contexts={"s2:001": "wrong session evidence"},
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "blocked_cross_session_context"
+    assert decision.missing_context_ids == ["s2:001"]
 
 
 # ----- Interceptor ------------------------------------------------------

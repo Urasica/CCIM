@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from ccim.api.schemas import Message, TextBlock, ToolResultBlock
 from ccim.compress.structured_outputs import is_structured_output_candidate
+from ccim.compress.text_spans import is_evidence_text_candidate
 from ccim.utils.tokens import estimate_message_tokens
 
 # 지원 언어 펜스 태그 (그룹 1 = 언어 태그, 그룹 2 = 코드 본문)
@@ -268,14 +269,21 @@ def has_compressible_content(message: Message) -> bool:
     """Return True for code or conservative structured command output candidates."""
     if has_compressible_code(message):
         return True
+    text = _extract_text(message)
+    if text and is_evidence_text_candidate(text):
+        return True
     if not isinstance(message.content, list):
         return False
     for block in message.content:
-        if not isinstance(block, ToolResultBlock):
-            continue
-        raw = _get_tool_result_text(block)
-        if raw and is_structured_output_candidate(raw):
-            return True
+        if isinstance(block, TextBlock):
+            if is_evidence_text_candidate(block.text):
+                return True
+        elif isinstance(block, ToolResultBlock):
+            raw = _get_tool_result_text(block)
+            if raw and (
+                is_structured_output_candidate(raw) or is_evidence_text_candidate(raw)
+            ):
+                return True
     return False
 
 

@@ -88,8 +88,31 @@ def summarize_measure_requests(rows: list[dict[str, Any]]) -> dict[str, Any]:
     retrieve_store_fetches = sum(
         int(flag.get("retrieve_original_store_fetches") or 0) for flag in flags
     )
-    guard_blocks = sum(
+    evidence_reload_hits = sum(int(flag.get("evidence_reload_hit") or 0) for flag in flags)
+    evidence_reload_misses = sum(int(flag.get("evidence_reload_miss") or 0) for flag in flags)
+    evidence_persistent_hits = sum(
+        int(flag.get("evidence_persistent_store_hit") or 0) for flag in flags
+    )
+    evidence_persistent_misses = sum(
+        int(flag.get("evidence_persistent_store_miss") or 0) for flag in flags
+    )
+    evidence_redis_warm_loads = sum(
+        int(flag.get("evidence_redis_warm_loads") or 0) for flag in flags
+    )
+    current_turn_guard_blocks = sum(
         1 for flag in flags if flag.get("current_turn_write_guard_blocked") is True
+    )
+    evidence_guard_blocks = sum(
+        1 for flag in flags if flag.get("evidence_guard_blocked") is True
+    )
+    evidence_guard_version_mismatches = sum(
+        int(flag.get("evidence_guard_version_mismatches") or 0) for flag in flags
+    )
+    guard_blocks = sum(
+        1
+        for flag in flags
+        if flag.get("current_turn_write_guard_blocked") is True
+        or flag.get("evidence_guard_blocked") is True
     )
     compressed_requests = sum(1 for flag in flags if int(flag.get("compress_context_ids") or 0) > 0)
     return {
@@ -107,7 +130,15 @@ def summarize_measure_requests(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "retrieve_tool_use_tokens_est": retrieve_arg_tokens,
         "retrieve_cache_hits": retrieve_cache_hits,
         "retrieve_store_fetches": retrieve_store_fetches,
+        "evidence_reload_hits": evidence_reload_hits,
+        "evidence_reload_misses": evidence_reload_misses,
+        "evidence_persistent_store_hits": evidence_persistent_hits,
+        "evidence_persistent_store_misses": evidence_persistent_misses,
+        "evidence_redis_warm_loads": evidence_redis_warm_loads,
         "guard_blocks": guard_blocks,
+        "current_turn_guard_blocks": current_turn_guard_blocks,
+        "evidence_guard_blocks": evidence_guard_blocks,
+        "evidence_guard_version_mismatches": evidence_guard_version_mismatches,
         "compressed_requests": compressed_requests,
     }
 
@@ -158,7 +189,14 @@ def render_markdown_report(data: dict[str, Any]) -> str:
         ("retrieve_result_tokens_est", "Retrieve result tokens est."),
         ("retrieve_cache_hits", "Retrieve cache hits"),
         ("retrieve_store_fetches", "Retrieve store fetches"),
+        ("evidence_reload_hits", "Evidence reload hits"),
+        ("evidence_reload_misses", "Evidence reload misses"),
+        ("evidence_persistent_store_hits", "Persistent store hits"),
+        ("evidence_persistent_store_misses", "Persistent store misses"),
+        ("evidence_redis_warm_loads", "Redis warm loads"),
         ("guard_blocks", "Guard blocks"),
+        ("evidence_guard_blocks", "Evidence guard blocks"),
+        ("evidence_guard_version_mismatches", "Evidence version mismatches"),
         ("avg_latency_ms", "Avg latency ms"),
     ]:
         left_value = left["summary"].get(key)
@@ -234,8 +272,17 @@ def _compact_flags(flags: dict[str, Any]) -> str:
         parts.append(f"ctx={flags.get('compress_context_ids')}")
     if flags.get("retrieve_original_result_tokens_est"):
         parts.append(f"ret_t={flags.get('retrieve_original_result_tokens_est')}")
+    if flags.get("evidence_reload_hit") or flags.get("evidence_reload_miss"):
+        parts.append(
+            f"reload={flags.get('evidence_reload_hit') or 0}/"
+            f"{flags.get('evidence_reload_miss') or 0}"
+        )
     if flags.get("current_turn_write_guard_blocked") is True:
         parts.append(f"guard={flags.get('current_turn_write_guard_block_reason') or 'blocked'}")
+    if flags.get("evidence_guard_blocked") is True:
+        parts.append(f"evidence_guard={flags.get('evidence_guard_block_reason') or 'blocked'}")
+    if flags.get("evidence_guard_version_mismatches"):
+        parts.append(f"version_mismatch={flags.get('evidence_guard_version_mismatches')}")
     if flags.get("stream_response_mode"):
         parts.append(f"stream={flags.get('stream_response_mode')}")
     return " ".join(parts) or "-"

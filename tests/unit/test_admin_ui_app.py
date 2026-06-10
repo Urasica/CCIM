@@ -48,6 +48,8 @@ async def test_admin_index_serves_static_html() -> None:
     assert "<main>" in response.text
     assert 'id="measureSummary"' in response.text
     assert 'id="redisContexts"' in response.text
+    assert "CCIM_EVIDENCE_STORE_PATH" in response.text
+    assert "Evidence reload" in response.text
 
 
 @pytest.mark.asyncio
@@ -154,6 +156,7 @@ def test_admin_html_static_dom_references_exist() -> None:
         "measureDetails",
         "ccimLog",
     } <= parser.ids
+    assert "documentLabel" in HTML
 
 
 def test_admin_html_api_references_match_fastapi_routes() -> None:

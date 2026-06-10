@@ -5,6 +5,12 @@ Design section 3.2.3:
   - Intercept the LLM's tool_use, resolve from Redis, send tool_result back.
 """
 
+from ccim.reversibility.evidence_guard import (
+    EvidenceGuard,
+    EvidenceGuardDecision,
+    EvidenceGuardRequest,
+    EvidenceVersionMismatch,
+)
 from ccim.reversibility.interceptor import (
     RETRIEVE_TOOL_NAME,
     InterceptStats,
@@ -25,8 +31,12 @@ __all__ = [
     "RETRIEVE_ORIGINAL_TOOL",
     "RETRIEVE_TOOL_NAME",
     "ContextRecord",
+    "EvidenceGuard",
+    "EvidenceGuardDecision",
+    "EvidenceGuardRequest",
     "EvidenceIdentity",
     "EvidenceSpan",
+    "EvidenceVersionMismatch",
     "InterceptStats",
     "ReversibilityInterceptor",
     "ReversibilityStore",

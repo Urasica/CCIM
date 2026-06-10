@@ -123,6 +123,7 @@ const keys = [
   "CCIM_LLM_TIMEOUT_S",
   "CCIM_LLM_BASE_URL",
   "CCIM_SESSION_PREFIX",
+  "CCIM_EVIDENCE_STORE_PATH",
   "CCIM_COMPRESSION_ENABLED",
   "CCIM_COMPRESSION_TRIGGER_TOKENS",
   "CCIM_COMPRESSION_TARGET_TOKENS",
@@ -312,6 +313,8 @@ function renderRedisContexts(data) {
   summary.innerHTML = `<div class="card">
     <h3>Redis</h3>
     ${metric("URL", data.url || "-")}
+    ${metric("Evidence store", data.evidence_store_enabled ? "enabled" : "disabled")}
+    ${metric("Store path", data.evidence_store_path || "-")}
     ${metric("Sessions", fmt(data.session_count || 0))}
     ${metric("Contexts", fmt(data.context_count || 0))}
     ${metric("Memory est.", formatBytes(data.memory_bytes_est || 0))}
@@ -329,7 +332,7 @@ function renderRedisContexts(data) {
   }
   details.innerHTML = `<table>
     <thead><tr>
-      <th>Session</th><th>Context</th><th>Language</th><th>Symbol</th><th>Path</th><th>Lines</th><th>Chars</th><th>Memory</th><th>TTL</th><th>Created</th>
+      <th>Session</th><th>Context</th><th>Kind</th><th>Span</th><th>Document</th><th>Version</th><th>Symbol</th><th>Path</th><th>Lines</th><th>Chars</th><th>Memory</th><th>TTL</th><th>Created</th>
     </tr></thead>
     <tbody>${rows.map(redisContextRow).join("")}</tbody>
   </table>`;
@@ -340,15 +343,23 @@ function redisContextRow(item) {
   return `<tr>
     <td>${escapeHtml(item.session.session_id)}</td>
     <td>${escapeHtml(ctx.context_id)}</td>
-    <td>${escapeHtml(ctx.language || "-")}</td>
+    <td>${escapeHtml(ctx.source_kind || ctx.language || "-")}</td>
+    <td>${escapeHtml(ctx.span_type || "-")}</td>
+    <td class="diagnostic">${escapeHtml(documentLabel(ctx))}</td>
+    <td>${escapeHtml(ctx.document_version || "-")}</td>
     <td>${escapeHtml(ctx.symbol_name || "-")}</td>
-    <td class="diagnostic">${escapeHtml(ctx.source_path || "-")}</td>
+    <td class="diagnostic">${escapeHtml(ctx.source_uri || ctx.source_path || "-")}</td>
     <td>${escapeHtml(lines)}</td>
     <td>${fmt(ctx.original_chars || 0)}</td>
     <td>${escapeHtml(formatBytes(ctx.memory_bytes_est || 0))}</td>
     <td>${escapeHtml(formatTtl(ctx.ttl_seconds))}</td>
     <td>${escapeHtml(formatTime(ctx.created_at))}</td>
   </tr>`;
+}
+function documentLabel(ctx) {
+  const id = ctx.document_id || "-";
+  const hash = ctx.document_hash ? ` #${String(ctx.document_hash).slice(0, 8)}` : "";
+  return `${id}${hash}`;
 }
 async function runMeasure() {
   setNotice("measureNotice", "측정 데이터를 불러오는 중...");
@@ -434,7 +445,11 @@ function summaryCard(series) {
     ${metric("순절감 추정", fmt(s.net_saved_input_tokens_est))}
     ${metric("Retrieve 결과", `${fmt(s.retrieve_result_tokens_est)} t`)}
     ${metric("Retrieve cache", `${fmt(s.retrieve_cache_hits)} hit / ${fmt(s.retrieve_store_fetches)} fetch`)}
+    ${metric("Evidence reload", `${fmt(s.evidence_reload_hits)} hit / ${fmt(s.evidence_reload_misses)} miss`)}
+    ${metric("Persistent store", `${fmt(s.evidence_persistent_store_hits)} hit / ${fmt(s.evidence_persistent_store_misses)} miss`)}
+    ${metric("Redis warm load", fmt(s.evidence_redis_warm_loads))}
     ${metric("Guard 차단", fmt(s.guard_blocks))}
+    ${metric("Evidence guard", `${fmt(s.evidence_guard_blocks)} blocked / ${fmt(s.evidence_guard_version_mismatches)} version`)}
     ${metric("평균 지연", `${fmt(s.avg_latency_ms)} ms`)}
   </div>`;
 }
@@ -563,7 +578,7 @@ function passesMeasureFilter(row) {
   const flags = row.feature_flags || {};
   if (filter === "compressed") return Number(flags.compress_context_ids || 0) > 0;
   if (filter === "retrieve") return Number(row.retrieve_original_calls || flags.retrieve_original_tool_uses || 0) > 0;
-  if (filter === "guard_blocked") return flags.current_turn_write_guard_blocked === true;
+  if (filter === "guard_blocked") return flags.current_turn_write_guard_blocked === true || flags.evidence_guard_blocked === true;
   if (filter === "stream") return flags.stream_requested === true || Boolean(flags.stream_response_mode);
   return true;
 }
@@ -664,10 +679,11 @@ function textFailureDetail(flags) {
 }
 function guardDetail(flags) {
   if (!flags || !Object.keys(flags).length) return "-";
-  if (!("current_turn_write_guard_blocked" in flags)) return "-";
-  const mode = flags.current_turn_write_guard_mode || (flags.current_turn_write_guard_blocked ? "blocked" : "allowed");
-  const parts = [
-    `mode=${mode}`,
+  const parts = [];
+  if ("current_turn_write_guard_blocked" in flags) {
+    const mode = flags.current_turn_write_guard_mode || (flags.current_turn_write_guard_blocked ? "blocked" : "allowed");
+    parts.push(`write_mode=${mode}`);
+    parts.push(
     flags.current_turn_write_guard_tool ? `tool=${flags.current_turn_write_guard_tool}` : "",
     flags.current_turn_write_guard_target_path ? `path=${flags.current_turn_write_guard_target_path}` : "",
     flags.current_turn_write_guard_block_reason ? `reason=${flags.current_turn_write_guard_block_reason}` : "",
@@ -675,8 +691,19 @@ function guardDetail(flags) {
     flags.current_turn_write_guard_retrieved_contexts ? `got=${flags.current_turn_write_guard_retrieved_contexts}` : "",
     flags.current_turn_write_guard_validated_contexts ? `valid=${flags.current_turn_write_guard_validated_contexts}` : "",
     flags.current_turn_write_guard_unknown_source_contexts ? `unknown_src=${flags.current_turn_write_guard_unknown_source_contexts}` : "",
-  ].filter(Boolean);
-  return parts.length ? parts.join(" ") : "-";
+    );
+  }
+  if ("evidence_guard_blocked" in flags) {
+    parts.push(`evidence=${flags.evidence_guard_blocked ? "blocked" : "allowed"}`);
+    if (flags.evidence_guard_action_type) parts.push(`action=${flags.evidence_guard_action_type}`);
+    if (flags.evidence_guard_block_reason) parts.push(`e_reason=${flags.evidence_guard_block_reason}`);
+    if (flags.evidence_guard_required_contexts) parts.push(`e_need=${flags.evidence_guard_required_contexts}`);
+    if (flags.evidence_guard_retrieved_contexts) parts.push(`e_got=${flags.evidence_guard_retrieved_contexts}`);
+    if (flags.evidence_guard_validated_contexts) parts.push(`e_valid=${flags.evidence_guard_validated_contexts}`);
+    if (flags.evidence_guard_version_mismatches) parts.push(`version_mismatch=${flags.evidence_guard_version_mismatches}`);
+  }
+  const filtered = parts.filter(Boolean);
+  return filtered.length ? filtered.join(" ") : "-";
 }
 function retrieveDetail(flags) {
   if (!flags || !Object.keys(flags).length) return "-";
@@ -691,6 +718,11 @@ function retrieveDetail(flags) {
     flags.retrieve_original_misses ? `miss=${flags.retrieve_original_misses}` : "",
     flags.retrieve_original_result_tokens_est ? `result_t=${flags.retrieve_original_result_tokens_est}` : "",
     flags.retrieve_original_tool_use_tokens_est ? `arg_t=${flags.retrieve_original_tool_use_tokens_est}` : "",
+    flags.evidence_reload_hit ? `reload_hit=${flags.evidence_reload_hit}` : "",
+    flags.evidence_reload_miss ? `reload_miss=${flags.evidence_reload_miss}` : "",
+    flags.evidence_persistent_store_hit ? `persist_hit=${flags.evidence_persistent_store_hit}` : "",
+    flags.evidence_persistent_store_miss ? `persist_miss=${flags.evidence_persistent_store_miss}` : "",
+    flags.evidence_redis_warm_loads ? `warm=${flags.evidence_redis_warm_loads}` : "",
     flags.retrieve_original_loop_limit_exceeded ? "loop_limit=true" : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" ") : "-";
@@ -702,11 +734,16 @@ function metadataDetail(flags) {
   const symbols = flags.compress_context_symbol_names || [];
   const ranges = flags.compress_context_original_ranges || [];
   const langs = flags.compress_tool_result_detected_languages || [];
+  const sourceKinds = flags.compress_text_span_source_kinds || [];
+  const spanTypes = flags.compress_text_span_types || [];
   if (paths.length) parts.push(`paths=${paths.slice(0, 3).join(",")}${paths.length > 3 ? ",..." : ""}`);
   if (flags.compress_current_turn_missing_source_paths) parts.push(`missing_paths=${flags.compress_current_turn_missing_source_paths}`);
   if (symbols.length) parts.push(`symbols=${symbols.slice(0, 5).join(",")}${symbols.length > 5 ? ",..." : ""}`);
   if (ranges.length) parts.push(`lines=${ranges.slice(0, 3).join(",")}${ranges.length > 3 ? ",..." : ""}`);
   if (langs.length) parts.push(`lang=${langs.join(",")}`);
+  if (sourceKinds.length) parts.push(`kind=${sourceKinds.join(",")}`);
+  if (spanTypes.length) parts.push(`span=${spanTypes.join(",")}`);
+  if (flags.evidence_guard_version_mismatches) parts.push(`doc_version_mismatch=${flags.evidence_guard_version_mismatches}`);
   if (flags.compress_context_metadata_count) parts.push(`meta=${flags.compress_context_metadata_count}`);
   return parts.length ? parts.join(" ") : "-";
 }

@@ -288,6 +288,10 @@ class CompressMiddleware:
             "compress_text_fence_count": 0,
             "compress_text_raw_chars_max": 0,
             "compress_text_raw_lines_max": 0,
+            "compress_text_span_contexts": 0,
+            "compress_text_span_successes": 0,
+            "compress_text_span_source_kinds": [],
+            "compress_text_span_types": [],
             "compress_context_metadata_count": 0,
             "compress_context_symbol_names": [],
             "compress_context_original_ranges": [],
@@ -483,11 +487,20 @@ class CompressMiddleware:
         반환: (compressed_message, did_compress, all_context_ids)
         """
         if isinstance(msg.content, str):
+            text_span_contexts_before = (
+                int(stats.get("compress_text_span_contexts", 0) or 0)
+                if stats is not None
+                else 0
+            )
             new_text, did, ctx_ids = await self._compress_text(
                 msg.content, session_id, stats
             )
             if did:
-                if stats is not None:
+                if (
+                    stats is not None
+                    and int(stats.get("compress_text_span_contexts", 0) or 0)
+                    == text_span_contexts_before
+                ):
                     stats["compress_ast_blocks"] += len(ctx_ids)
                 return Message(role=msg.role, content=new_text), True, ctx_ids
             return msg, False, []
@@ -497,13 +510,22 @@ class CompressMiddleware:
         all_ctx_ids: list[str] = []
         for block in msg.content:
             if isinstance(block, TextBlock):
+                text_span_contexts_before = (
+                    int(stats.get("compress_text_span_contexts", 0) or 0)
+                    if stats is not None
+                    else 0
+                )
                 new_text, did, ctx_ids = await self._compress_text(
                     block.text, session_id, stats
                 )
                 new_blocks.append(TextBlock(text=new_text))
                 if did:
                     any_did = True
-                    if stats is not None:
+                    if (
+                        stats is not None
+                        and int(stats.get("compress_text_span_contexts", 0) or 0)
+                        == text_span_contexts_before
+                    ):
                         stats["compress_ast_blocks"] += len(ctx_ids)
                     all_ctx_ids.extend(ctx_ids)
             elif isinstance(block, ToolResultBlock):
@@ -758,6 +780,7 @@ class CompressMiddleware:
             summarize_command_output,
             tool_result_hash,
         )
+        from ccim.compress.text_spans import compress_text_spans
         from ccim.compress.trigger import (
             detect_language_from_code,
             get_tool_result_text,
@@ -815,6 +838,36 @@ class CompressMiddleware:
                     if stats is not None:
                         stats["compress_tool_result_store_blob_failures"] += 1
 
+            span_result = compress_text_spans(
+                raw,
+                session_id=session_id,
+                source_path=source_path,
+            )
+            if span_result.blocks:
+                try:
+                    await self._store_blocks(
+                        span_result,
+                        session_id,
+                        language="text",
+                        source_path=source_path,
+                    )
+                except Exception:
+                    self._record_tool_result_failure(stats, "store_text_span_failed")
+                    return block, False, []
+                ctx_ids = [f"{session_id}:{span.context_id}" for span in span_result.blocks]
+                if stats is not None:
+                    stats["compress_text_span_successes"] += 1
+                    stats["compress_text_span_contexts"] += len(ctx_ids)
+                    self._record_context_metadata(stats, span_result.blocks, source_path)
+                return (
+                    ToolResultBlock(
+                        tool_use_id=block.tool_use_id,
+                        content=span_result.compressed_text,
+                        is_error=block.is_error,
+                    ),
+                    True,
+                    ctx_ids,
+                )
             summarized = summarize_command_output(raw, is_error=block.is_error)
             if summarized is not None:
                 if stats is not None:
@@ -912,10 +965,18 @@ class CompressMiddleware:
         stats["compress_context_metadata_count"] += len(blocks)
         symbols = set(stats.get("compress_context_symbol_names") or [])
         ranges = set(stats.get("compress_context_original_ranges") or [])
+        span_types = set(stats.get("compress_text_span_types") or [])
+        source_kinds = set(stats.get("compress_text_span_source_kinds") or [])
         for block in blocks:
             symbol_name = getattr(block, "symbol_name", None)
             if isinstance(symbol_name, str) and symbol_name:
                 symbols.add(symbol_name)
+            span_type = getattr(block, "span_type", None)
+            if isinstance(span_type, str) and span_type:
+                span_types.add(span_type)
+            source_kind = getattr(block, "source_kind", None)
+            if isinstance(source_kind, str) and source_kind:
+                source_kinds.add(source_kind)
             original_lines = getattr(block, "original_lines", None)
             if (
                 isinstance(source_path, str)
@@ -925,6 +986,8 @@ class CompressMiddleware:
                 ranges.add(f"{source_path}:{original_lines[0]}-{original_lines[1]}")
         stats["compress_context_symbol_names"] = sorted(symbols)[:20]
         stats["compress_context_original_ranges"] = sorted(ranges)[:20]
+        stats["compress_text_span_types"] = sorted(span_types)[:20]
+        stats["compress_text_span_source_kinds"] = sorted(source_kinds)[:20]
 
     @staticmethod
     def _record_text_attempt(
@@ -957,12 +1020,26 @@ class CompressMiddleware:
         store 실패 시 해당 펜스는 원본을 그대로 유지 (고아 마커 방지).
         반환: (new_text, did_compress, active_context_ids)
         """
+        from ccim.compress.text_spans import compress_text_spans
         from ccim.compress.trigger import detect_language_from_fence
 
         matches = list(_CODE_FENCE_RE.finditer(text))
         self._record_text_attempt(stats, text, fence_count=len(matches))
         if not matches:
-            self._record_text_failure(stats, "no_code_fence")
+            span_result = compress_text_spans(text, session_id=session_id)
+            if span_result.blocks:
+                try:
+                    await self._store_blocks(span_result, session_id, language="text")
+                except Exception:
+                    self._record_text_failure(stats, "store_text_span_failed")
+                    return text, False, []
+                ctx_ids = [f"{session_id}:{span.context_id}" for span in span_result.blocks]
+                if stats is not None:
+                    stats["compress_text_span_successes"] += 1
+                    stats["compress_text_span_contexts"] += len(ctx_ids)
+                    self._record_context_metadata(stats, span_result.blocks, None)
+                return span_result.compressed_text, True, ctx_ids
+            self._record_text_failure(stats, "no_code_or_text_span")
             return text, False, []
 
         # (start, end, replacement) — store 성공한 펜스만 기록
@@ -1005,7 +1082,9 @@ class CompressMiddleware:
             replacements.append(
                 (m.start(), m.end(), f"{prefix}{comp_result.compressed_text}{suffix}")
             )
-            active_ctx_ids.append(f"{session_id}:{comp_result.blocks[0].context_id}")
+            active_ctx_ids.extend(
+                f"{session_id}:{block.context_id}" for block in comp_result.blocks
+            )
 
         if not replacements:
             self._record_text_failure(stats, "no_replacements")
@@ -1040,6 +1119,13 @@ class CompressMiddleware:
                 source_path=source_path,
                 symbol_name=getattr(block, "symbol_name", None),
                 original_lines=block.original_lines,
+                document_id=getattr(block, "document_id", None),
+                document_hash=getattr(block, "document_hash", None),
+                document_version=getattr(block, "document_version", None),
+                span_type=getattr(block, "span_type", "code_symbol"),
+                source_kind=getattr(block, "source_kind", "code"),
+                source_uri=getattr(block, "source_uri", None) or source_path,
+                metadata=dict(getattr(block, "metadata", {}) or {}),
             )
             await self._store.put(record)
 
