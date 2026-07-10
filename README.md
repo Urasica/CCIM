@@ -26,7 +26,7 @@ CCIM는 LLM API gateway로 개발합니다. Anthropic Messages 호환 요청을 
 - MCP tool/resource/prompt 기반 압축 workflow
 - host가 파일을 읽은 뒤 사후 압축하는 방식
 
-이 방향의 결정 이유와 개발 계획은 `DEV_PLAN.md`에 정리되어 있습니다.
+이 방향의 결정 이유와 개발 계획은 [개발 문서](docs/README.md)에 정리되어 있습니다.
 
 ## 왜 필요한가
 
@@ -302,7 +302,7 @@ uv run python tools/compare/direct_test.py --session direct-check
 | `tools/admin_ui/` | Admin UI 정적 파일과 측정 UI |
 | `tools/compare/` | benchmark, measure, task fixture, semantic checker |
 | `img/compare.png` | q1/q2 비교 이미지 |
-| `DEV_PLAN.md` | MCP화 폐기 결정, API gateway 집중 사유, v2 보완 계획 |
+| `docs/` | 목표·아키텍처·근거 정책·검증·로드맵 등 개발 기준 문서 |
 
 ## 트레이드오프
 

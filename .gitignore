@@ -51,6 +51,7 @@ tools/log/
 .codex/
 
 # Local helpers
+.agents/
 scripts/*.local.ps1
 DEV_PLAN.md
 
