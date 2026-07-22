@@ -28,6 +28,19 @@ CCIM는 LLM API gateway로 개발합니다. Anthropic Messages 호환 요청을 
 
 이 방향의 결정 이유와 개발 계획은 [개발 문서](docs/README.md)에 정리되어 있습니다.
 
+## 확정된 운영 방향
+
+아래 운영 방향은 확정됐지만 아직 전체 자동화가 구현된 상태는 아닙니다.
+
+- 개발과 검증은 로컬 작업 트리에서 수행합니다.
+- pull request와 일반 branch push는 자동 CI만 수행합니다.
+- `main` 반영 후 CI를 통과한 commit만 container image로 만들고 AWS ECR에 commit SHA와 digest로 게시합니다.
+- GitHub Actions는 OIDC로 단기 AWS 권한을 얻고, Systems Manager Run Command로 단일 AWS EC2 VM의 Docker Compose 배포를 갱신합니다.
+- 배포 후 migration과 readiness smoke가 실패하면 직전 image digest로 되돌립니다.
+- Redis, PostgreSQL과 evidence volume은 같은 VM의 private network에 두고 공용 포트로 노출하지 않습니다.
+
+운영 배포 결정은 [ADR-0002](docs/decisions/ADR-0002-single-aws-vm-cicd.md), GPT-5 mini 일일 검증 작업과 하루 250만 무료 공유 token 한도는 [일일 운영 검증 계획](docs/evaluation/daily-gpt5-mini-canary.md)에 기록합니다.
+
 ## 왜 필요한가
 
 코딩 에이전트는 작업 중 다음 흐름을 자주 반복합니다.
@@ -176,7 +189,7 @@ Admin UI    : 설정, 프로세스 제어, 측정 결과, Redis context 상태 �
 - 평균 지연은 증가했습니다. 현재 구현에서는 토큰 절감과 의미 보존 보강의 비용으로 봐야 합니다.
 
 ---
-단일 파일을 AST 압축기에 직접 넣었을 때는 더 큰 압축률이 나옵니다. 이는 전체 LLM 요청이 아니라 `tools/compare/large_reference.py` 파일 하나만 압축한 값이므로, 위의 전체 절감률과 구분해서 봐야 합니다.
+단일 파일을 AST 압축기에 직접 넣었을 때는 더 큰 압축률이 나옵니다. 이는 전체 LLM 요청이 아니라 `tests/compare/large_reference.py` 파일 하나만 압축한 값이므로, 위의 전체 절감률과 구분해서 봐야 합니다.
 
 | 항목 | 압축 전 | 압축 후 | 절감 |
 |---|---:|---:|---:|
@@ -195,6 +208,23 @@ q2 테스트의 결과처럼 낮은 절감률로 측정됩니다.
 ```powershell
 cd CCIM
 docker compose up -d redis postgres
+```
+
+전체 gateway stack 실행:
+
+```powershell
+docker compose up -d --build --wait
+curl.exe --fail http://127.0.0.1:8080/live
+curl.exe --fail http://127.0.0.1:8080/ready
+```
+
+Compose는 gateway만 `127.0.0.1:8080`에 공개하고 Redis와 PostgreSQL은 내부 network에만 둡니다. PostgreSQL migration이 완료되지 않으면 gateway가 시작되지 않으며, `/ready`도 dependency 상태를 구조화해 `503`을 반환합니다.
+
+migration 상태 확인과 적용:
+
+```powershell
+uv run python -m ccim.migrations check
+uv run python -m ccim.migrations apply
 ```
 
 Admin UI 실행:
@@ -265,24 +295,34 @@ CCIM_COMPRESSION_ENABLED=false
 
 ## 측정과 검증
 
+roadmap 01 전체 로컬 기준선:
+
+```powershell
+.\scripts\verify.ps1
+```
+
+이 명령은 lockfile, Ruff, 문서 링크, unit, 외부 LLM 없는 mock integration, semantic golden fixture와 whitespace를 순서대로 확인합니다. PostgreSQL fixture와 Docker smoke는 GitHub Actions에서 별도 job으로 실행합니다.
+
 Measure UI에서 prefix를 넣어 비교하고 markdown report로 export할 수 있습니다.
 CLI로는 다음처럼 확인합니다.
 
 ```powershell
-uv run python tools/compare/measure.py --compare q1 q2 --since 120 --verbose
+uv run python tests/compare/measure.py --compare q1 q2 --since 120 --verbose
 ```
 
 task2 산출물 semantic checker:
 
 ```powershell
-uv run python tools/compare/check_task2_semantics.py tools/compare/workspace/task2
+uv run python tests/compare/check_task2_semantics.py tests/compare/workspace/task2
 ```
 
 직접 압축 경로 확인:
 
 ```powershell
-uv run python tools/compare/direct_test.py --session direct-check
+uv run python tests/compare/direct_test.py --session direct-check
 ```
+
+`direct_test.py`는 추정 토큰과 별도로 실제 upstream HTTP body bytes 및 provider가 반환한 input/output usage 합계를 표시합니다.
 
 ## 주요 파일
 
@@ -300,7 +340,7 @@ uv run python tools/compare/direct_test.py --session direct-check
 | `migrations/002_request_operational_metrics.sql` | feature_flags 기반 운영 지표 view |
 | `tools/admin_server.py` | Admin UI 서버 진입점 |
 | `tools/admin_ui/` | Admin UI 정적 파일과 측정 UI |
-| `tools/compare/` | benchmark, measure, task fixture, semantic checker |
+| `tests/compare/` | benchmark, measure, task fixture, semantic checker |
 | `img/compare.png` | q1/q2 비교 이미지 |
 | `docs/` | 목표·아키텍처·근거 정책·검증·로드맵 등 개발 기준 문서 |
 

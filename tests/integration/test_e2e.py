@@ -151,6 +151,11 @@ def _build_app(
     class _Cfg:
         compression_trigger_tokens = compression_trigger
         compression_target_tokens = compression_trigger // 2
+        compression_enable_retrieve = True
+        current_turn_compression_enabled = False
+        current_turn_compression_trigger_tokens = compression_trigger
+        current_turn_compression_read_tools = "Read,Grep,Glob,LS,Search"
+        compression_cluster_summary_enabled = False
         redis_ttl_seconds = 60
 
     stages = [
@@ -252,24 +257,24 @@ class TestL1Stub:
             r = await c.post(
                 "/v1/messages",
                 json=_msg_payload("test"),
-                headers={"x-ccim-session": "sess_abc"},
+                headers={"x-ccim-session": "sess-abc"},
             )
         assert r.status_code == 200
-        assert r.headers.get("x-ccim-session") == "sess_abc"
+        assert r.headers.get("x-ccim-session") == "sess-abc"
 
     async def test_auto_session_uuid(self) -> None:
         async with self._client() as c:
             r = await c.post("/v1/messages", json=_msg_payload("test"))
         assert r.status_code == 200
         sid = r.headers.get("x-ccim-session", "")
-        assert len(sid) == 36
+        assert uuid.UUID(sid[-36:])
 
     async def test_retrieve_intercept_roundtrip(self) -> None:
         """stub LLM이 retrieve_original 호출 → Redis에서 원본 조회 → 최종 응답."""
         from ccim.reversibility.store import ContextRecord, ReversibilityStore
 
         fake_redis = _FakeRedis()
-        sid = "test_session"
+        sid = "test-session"
         ctx_id = "001"
         store_temp = ReversibilityStore(redis=fake_redis, ttl_seconds=60)
         async def _seed() -> None:
@@ -387,7 +392,7 @@ class TestL2Infra:
     async def test_redis_store_roundtrip(self, real_redis: Any) -> None:
         from ccim.reversibility.store import ContextRecord, ReversibilityStore
         store = ReversibilityStore(redis=real_redis, ttl_seconds=30)
-        sid = f"l2_{uuid.uuid4().hex[:6]}"
+        sid = f"l2-{uuid.uuid4().hex[:6]}"
         await store.put(ContextRecord(
             session_id=sid, context_id="001",
             original_code="def x(): return 1",
@@ -416,7 +421,7 @@ class TestL2Infra:
     async def test_pipeline_with_real_redis(self, real_redis: Any) -> None:
         """실제 Redis + stub LLM 전체 파이프라인."""
         from ccim.reversibility.store import ContextRecord, ReversibilityStore
-        sid = f"pipe_{uuid.uuid4().hex[:6]}"
+        sid = f"pipe-{uuid.uuid4().hex[:6]}"
         store = ReversibilityStore(redis=real_redis, ttl_seconds=30)
         await store.put(ContextRecord(
             session_id=sid, context_id="001",
@@ -577,7 +582,7 @@ class TestL3Ollama:
         from ccim.reversibility.store import ContextRecord, ReversibilityStore
 
         fake_redis = _FakeRedis()
-        sid = f"retv_{uuid.uuid4().hex[:6]}"
+        sid = f"retv-{uuid.uuid4().hex[:6]}"
         store = ReversibilityStore(redis=fake_redis, ttl_seconds=60)
         await store.put(ContextRecord(
             session_id=sid, context_id="001",
@@ -606,6 +611,11 @@ class TestL3Ollama:
         class _Cfg:
             compression_trigger_tokens = 999_999
             compression_target_tokens = 500_000
+            compression_enable_retrieve = True
+            current_turn_compression_enabled = False
+            current_turn_compression_trigger_tokens = 999_999
+            current_turn_compression_read_tools = "Read,Grep,Glob,LS,Search"
+            compression_cluster_summary_enabled = False
             redis_ttl_seconds = 60
 
         stages = [

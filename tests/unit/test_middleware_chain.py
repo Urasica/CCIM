@@ -1359,10 +1359,10 @@ async def test_current_turn_write_guard_allows_write_to_unrelated_output_path() 
 
     ctx = _make_ctx()
     ctx.extras["current_turn_context_ids"] = ["s-current:001", "s-current:002"]
-    ctx.extras["current_turn_source_paths"] = {"tools/compare/large_reference.py"}
+    ctx.extras["current_turn_source_paths"] = {"tests/compare/large_reference.py"}
     ctx.extras["current_turn_context_sources"] = {
-        "s-current:001": "tools/compare/large_reference.py",
-        "s-current:002": "tools/compare/large_reference.py",
+        "s-current:001": "tests/compare/large_reference.py",
+        "s-current:002": "tests/compare/large_reference.py",
     }
     ctx.response_json = {
         "content": [
@@ -1371,7 +1371,7 @@ async def test_current_turn_write_guard_allows_write_to_unrelated_output_path() 
                 "id": "write-1",
                 "name": "Write",
                 "input": {
-                    "file_path": "tools/compare/workspace/task2/analysis_pattern.md",
+                    "file_path": "tests/compare/workspace/task2/analysis_pattern.md",
                     "content": "## Pattern\n- output\n",
                 },
             }
@@ -1388,7 +1388,7 @@ async def test_current_turn_write_guard_allows_write_to_unrelated_output_path() 
     assert flags["current_turn_write_guard_mode"] == "allowed_unrelated_write"
     assert flags["current_turn_write_guard_allow_tool"] == "Write"
     assert flags["current_turn_write_guard_target_path"] == (
-        "tools/compare/workspace/task2/analysis_pattern.md"
+        "tests/compare/workspace/task2/analysis_pattern.md"
     )
     assert sentinel.called
 
@@ -1409,7 +1409,7 @@ async def test_current_turn_write_guard_blocks_when_any_later_write_is_unsafe() 
                 "id": "write-1",
                 "name": "Write",
                 "input": {
-                    "file_path": "tools/compare/workspace/task2/output.md",
+                    "file_path": "tests/compare/workspace/task2/output.md",
                     "content": "safe output",
                 },
             },
@@ -1527,6 +1527,50 @@ async def test_forward_simple_response() -> None:
     assert ctx.response_json["content"][0]["text"] == "response text"
     assert ctx.retrieve_original_calls == 0
     assert ctx.tokens_output == 5
+    flags = ctx.extras["feature_flags"]
+    assert flags["upstream_request_calls"] == 1
+    assert flags["upstream_request_bytes_measured_calls"] == 0
+    assert flags["provider_usage_available_calls"] == 0
+
+
+async def test_forward_records_actual_upstream_measurements() -> None:
+    from ccim.llm.client import LLMResponse
+    from ccim.reversibility.interceptor import ToolResolution
+
+    llm = MagicMock()
+    llm.complete = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                _retrieve_response("test_session:001"),
+                request_bytes=1200,
+                provider_usage_available=True,
+            ),
+            LLMResponse(
+                _simple_response("final answer"),
+                request_bytes=1800,
+                provider_usage_available=True,
+            ),
+        ]
+    )
+    interceptor = MagicMock()
+    interceptor.handle_tool_use = AsyncMock(
+        return_value=ToolResolution(content="original code", is_error=False)
+    )
+    ctx = _make_ctx()
+
+    await MiddlewareChain(
+        stages=[ForwardAndInterceptMiddleware(llm_client=llm, interceptor=interceptor)]
+    ).run(ctx)
+
+    flags = ctx.extras["feature_flags"]
+    assert flags["upstream_request_calls"] == 2
+    assert flags["upstream_request_bytes_initial"] == 1200
+    assert flags["upstream_request_bytes_total"] == 3000
+    assert flags["upstream_request_bytes_measured_calls"] == 2
+    assert flags["upstream_http_attempts"] == 2
+    assert flags["provider_input_tokens_total"] == 30
+    assert flags["provider_output_tokens_total"] == 15
+    assert flags["provider_usage_available_calls"] == 2
 
 
 async def test_forward_stream_request_uses_synthesized_complete_mode() -> None:
@@ -1754,8 +1798,6 @@ async def test_forward_max_loop_guard() -> None:
 
 async def test_telemetry_fires_after_chain() -> None:
     """텔레메트리는 call_next 이후 실행. 실패해도 예외 전파 없음."""
-    import asyncio
-
     log_calls: list[Any] = []
 
     class _MockLogger:
@@ -1763,14 +1805,25 @@ async def test_telemetry_fires_after_chain() -> None:
             log_calls.append(record)
 
     sentinel = _NoOpMiddleware()
-    chain = MiddlewareChain(stages=[sentinel, TelemetryMiddleware(_MockLogger())])
+    telemetry = TelemetryMiddleware(_MockLogger())
+    chain = MiddlewareChain(stages=[sentinel, telemetry])
     ctx = _make_ctx()
     ctx.pcfi_action = "allow"
     await chain.run(ctx)
 
     assert sentinel.called
-    await asyncio.sleep(0)
+    snapshot = await telemetry.drain(timeout_s=1.0)
     assert len(log_calls) == 1
+    assert snapshot == {
+        "enabled": True,
+        "pending": 0,
+        "scheduled": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "dropped": 0,
+        "skipped": 0,
+        "drain_timeouts": 0,
+    }
 
 
 async def test_telemetry_does_not_block_chain() -> None:
@@ -1803,10 +1856,68 @@ async def test_telemetry_survives_logger_error() -> None:
         async def log(self, record: Any) -> None:
             raise RuntimeError("DB down")
 
-    chain = MiddlewareChain(stages=[TelemetryMiddleware(_BrokenLogger())])
+    telemetry = TelemetryMiddleware(_BrokenLogger())
+    chain = MiddlewareChain(stages=[telemetry])
     ctx = _make_ctx()
     ctx.pcfi_action = "allow"
     await chain.run(ctx)  # 예외 전파 없어야 함
+    snapshot = await telemetry.drain(timeout_s=1.0)
+    assert snapshot["failed"] == 1
+
+
+async def test_telemetry_drain_waits_for_pending_write() -> None:
+    import asyncio
+
+    released = asyncio.Event()
+
+    class _ControlledLogger:
+        async def log(self, record: Any) -> None:
+            await released.wait()
+
+    telemetry = TelemetryMiddleware(_ControlledLogger())
+    ctx = _make_ctx()
+    ctx.pcfi_action = "allow"
+    await MiddlewareChain(stages=[telemetry]).run(ctx)
+
+    drain_task = asyncio.create_task(telemetry.drain(timeout_s=1.0))
+    await asyncio.sleep(0)
+    assert drain_task.done() is False
+    released.set()
+    snapshot = await drain_task
+
+    assert snapshot["pending"] == 0
+    assert snapshot["succeeded"] == 1
+    assert snapshot["dropped"] == 0
+
+
+async def test_telemetry_drain_timeout_records_dropped_write() -> None:
+    import asyncio
+
+    class _NeverLogger:
+        async def log(self, record: Any) -> None:
+            await asyncio.Event().wait()
+
+    telemetry = TelemetryMiddleware(_NeverLogger())
+    ctx = _make_ctx()
+    ctx.pcfi_action = "allow"
+    await MiddlewareChain(stages=[telemetry]).run(ctx)
+
+    snapshot = await telemetry.drain(timeout_s=0.0)
+
+    assert snapshot["pending"] == 0
+    assert snapshot["dropped"] == 1
+    assert snapshot["drain_timeouts"] == 1
+
+
+async def test_telemetry_disabled_counts_skipped_record() -> None:
+    logger = MagicMock()
+    telemetry = TelemetryMiddleware(logger, enabled=False)
+    ctx = _make_ctx()
+
+    await MiddlewareChain(stages=[telemetry]).run(ctx)
+
+    assert telemetry.snapshot()["skipped"] == 1
+    assert telemetry.snapshot()["scheduled"] == 0
 
 
 # ──────────────────────────────────────────────────────────────────

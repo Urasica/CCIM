@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKSPACE = ROOT / "tools" / "compare" / "workspace" / "current"
+WORKSPACE = ROOT / "tests" / "compare" / "workspace" / "current"
 TEST_FILE = WORKSPACE / "test_reference_pipeline.py"
 RESULT_FILE = WORKSPACE / "test_result.txt"
 

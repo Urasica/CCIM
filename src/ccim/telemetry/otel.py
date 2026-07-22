@@ -73,7 +73,7 @@ def _setup(app: FastAPI, *, service_name: str, exporter_endpoint: str) -> None:
         FastAPIInstrumentor.instrument_app(
             app,
             tracer_provider=provider,
-            excluded_urls="/health",
+            excluded_urls="/health,/live,/ready",
         )
     except ImportError:
         logger.warning(

@@ -52,9 +52,18 @@ tools/log/
 
 # Local helpers
 .agents/
+/guide/
+/roadmap/
 scripts/*.local.ps1
 DEV_PLAN.md
 
 # Compare run outputs
-tools/compare/workspace/*
-!tools/compare/workspace/.gitkeep
+tests/compare/workspace/*
+!tests/compare/workspace/.gitkeep
+
+# Generated reports and local runtime state
+/output/
+/tmp/
+*.db
+*.sqlite
+*.sqlite3

@@ -6,15 +6,15 @@ Do not summarize this file. Do not ask for confirmation. Execute the steps now.
 
 Verify that CCIM repeatedly compresses a large prior `ToolResultBlock` during a realistic multi-step code task.
 
-This task reads `tools/compare/large_reference.py` once, then uses that already-read code across several separate output steps. The large file should be current-turn excluded immediately after Read, then become prior context for the later steps. Those later steps should repeatedly trigger AST compression without changing the current-turn exclusion policy.
+This task reads `tests/compare/large_reference.py` once, then uses that already-read code across several separate output steps. The large file should be current-turn excluded immediately after Read, then become prior context for the later steps. Those later steps should repeatedly trigger AST compression without changing the current-turn exclusion policy.
 
 ## Rules
 
-- Do not modify `tools/compare/large_reference.py`.
-- Do not modify `tools/compare/run_task2.py`.
-- Do not modify `tools/compare/task2.md`.
-- Do not read `tools/compare/large_reference.py` more than once.
-- Do not read `tools/compare/large_reference.py` in chunks.
+- Do not modify `tests/compare/large_reference.py`.
+- Do not modify `tests/compare/run_task2.py`.
+- Do not modify `tests/compare/task2.md`.
+- Do not read `tests/compare/large_reference.py` more than once.
+- Do not read `tests/compare/large_reference.py` in chunks.
 - If the whole file cannot be read in one Read call, stop immediately and output `READ_LIMIT_HIT`.
 - Do not use Bash.
 - Do not use `{WORKSPACE}` placeholders.
@@ -43,9 +43,9 @@ This task reads `tools/compare/large_reference.py` once, then uses that already-
 Run these PowerShell commands exactly:
 
 ```
-PowerShell: if (Test-Path "tools/compare/workspace/task2") { Remove-Item -LiteralPath "tools/compare/workspace/task2" -Recurse -Force }
-PowerShell: New-Item -ItemType Directory -Force -Path "tools/compare/workspace/task2" | Out-Null
-PowerShell: $stale = @("tools/compare/workspace/task2/analysis_pattern.md","tools/compare/workspace/task2/refactor_plan.md","tools/compare/workspace/task2/batch_comparison.md","tools/compare/workspace/task2/implementation_sketch.md") | Where-Object { Test-Path -LiteralPath $_ }; if ($stale.Count -gt 0) { Write-Output "STALE_WORKSPACE"; exit 1 }
+PowerShell: if (Test-Path "tests/compare/workspace/task2") { Remove-Item -LiteralPath "tests/compare/workspace/task2" -Recurse -Force }
+PowerShell: New-Item -ItemType Directory -Force -Path "tests/compare/workspace/task2" | Out-Null
+PowerShell: $stale = @("tests/compare/workspace/task2/analysis_pattern.md","tests/compare/workspace/task2/refactor_plan.md","tests/compare/workspace/task2/batch_comparison.md","tests/compare/workspace/task2/implementation_sketch.md") | Where-Object { Test-Path -LiteralPath $_ }; if ($stale.Count -gt 0) { Write-Output "STALE_WORKSPACE"; exit 1 }
 PowerShell: uv run python -c "import sys; print(sys.executable)"
 ```
 
@@ -57,7 +57,7 @@ Do not continue to Step 1 unless the workspace is empty of the four markdown out
 Read this file with the Read tool:
 
 ```
-tools/compare/large_reference.py
+tests/compare/large_reference.py
 ```
 
 After reading it, do not explain the file. Continue immediately to Step 2.
@@ -67,7 +67,7 @@ After reading it, do not explain the file. Continue immediately to Step 2.
 Using only the code already read in Step 1, write:
 
 ```
-tools/compare/workspace/task2/analysis_pattern.md
+tests/compare/workspace/task2/analysis_pattern.md
 ```
 
 Required sections:
@@ -109,7 +109,7 @@ Replace each `...` with one concrete fact from the code read in Step 1. The fact
 Using only the code already read in Step 1, write:
 
 ```
-tools/compare/workspace/task2/refactor_plan.md
+tests/compare/workspace/task2/refactor_plan.md
 ```
 
 Required sections:
@@ -151,7 +151,7 @@ Replace each `...` with one concrete fact from the code read in Step 1. The fact
 Using only the code already read in Step 1, write:
 
 ```
-tools/compare/workspace/task2/batch_comparison.md
+tests/compare/workspace/task2/batch_comparison.md
 ```
 
 Required sections:
@@ -193,7 +193,7 @@ Replace each `...` with one concrete fact from the code read in Step 1. The fact
 Using only the code already read in Step 1, write:
 
 ```
-tools/compare/workspace/task2/implementation_sketch.md
+tests/compare/workspace/task2/implementation_sketch.md
 ```
 
 Required sections:
@@ -232,10 +232,10 @@ Replace each `...` with one concrete fact from the code read in Step 1. The fact
 
 ## Completion Criteria
 
-- `tools/compare/workspace/task2/analysis_pattern.md` exists.
-- `tools/compare/workspace/task2/refactor_plan.md` exists.
-- `tools/compare/workspace/task2/batch_comparison.md` exists.
-- `tools/compare/workspace/task2/implementation_sketch.md` exists.
+- `tests/compare/workspace/task2/analysis_pattern.md` exists.
+- `tests/compare/workspace/task2/refactor_plan.md` exists.
+- `tests/compare/workspace/task2/batch_comparison.md` exists.
+- `tests/compare/workspace/task2/implementation_sketch.md` exists.
 - These four markdown files were created during this execution, not reused from before Step 0.
 - The original files listed in Rules were not modified.
 - Final response only reports the four output paths.

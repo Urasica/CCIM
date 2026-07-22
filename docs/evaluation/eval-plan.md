@@ -43,7 +43,7 @@
 
 ## 지표와 보고
 
-- 입력 토큰 절감률과 요청 지연을 함께 기록한다.
+- 추정 입력 토큰 절감률, 실제 upstream HTTP body bytes, provider-reported input/output usage와 요청 지연을 구분해 기록한다.
 - retrieve cache hit, persistent hit, reload hit/miss, guard block rate를 추적한다.
 - semantic checker 통과율, 사실 왜곡/false guard의 회귀 수, context trace coverage를 추적한다.
 - benchmark 보고서에는 run/session prefix, fixture, 기간, 원본·전송·출력 토큰을 함께 남긴다. 서로 다른 DB 상태의 결과를 같은 A/B 수치처럼 비교하지 않는다.
@@ -51,3 +51,5 @@
 ## 실행 원칙
 
 변경 범위에 맞는 가장 좁은 테스트부터 실행하고, 압축·복구·guard·UI를 함께 바꾼 경우에만 관련 묶음을 확장한다. 명령은 [개발 워크플로](../development/workflow.md)에 정리한다.
+
+실제 provider를 사용하는 예약 검증은 [GPT-5 mini 일일 운영 검증 계획](daily-gpt5-mini-canary.md)을 따른다. 매일 같은 task의 baseline/compressed A/B를 synthetic benchmark로 실행하며 개인 실제 작업 telemetry와 합치지 않는다. UTC 일일 ledger, 무료 적용 여부, run별 hard cap, model snapshot, task version 중 하나라도 누락된 run은 장기 비교 표본에서 제외한다.

@@ -83,3 +83,58 @@ async def test_lifespan_respects_global_compression_disabled() -> None:
     ):
         async with main.lifespan(app):
             assert app.state.compression_enabled is False
+
+
+def test_readiness_payload_is_ready_with_current_dependencies() -> None:
+    import ccim.main as main
+
+    class _Telemetry:
+        def snapshot(self) -> dict[str, int | bool]:
+            return {
+                "enabled": True,
+                "pending": 0,
+                "scheduled": 4,
+                "succeeded": 4,
+                "failed": 0,
+                "dropped": 0,
+                "skipped": 0,
+                "drain_timeouts": 0,
+            }
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            redis=object(),
+            db_engine=object(),
+            migration_state={"status": "current", "current": True},
+            compression_enabled=True,
+            telemetry_enabled=True,
+            telemetry_runtime=_Telemetry(),
+        )
+    )
+
+    payload, status_code = main._readiness_payload(app, main.get_settings())
+
+    assert status_code == 200
+    assert payload["status"] == "ready"
+    assert payload["dependencies"]["migrations"]["current"] is True
+    assert payload["telemetry"]["succeeded"] == 4
+
+
+def test_readiness_payload_reports_migration_degraded() -> None:
+    import ccim.main as main
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            redis=object(),
+            db_engine=object(),
+            migration_state={"status": "outdated", "current": False},
+            compression_enabled=True,
+            telemetry_enabled=False,
+        )
+    )
+
+    payload, status_code = main._readiness_payload(app, main.get_settings())
+
+    assert status_code == 503
+    assert payload["status"] == "degraded"
+    assert payload["dependencies"]["migrations"]["status"] == "outdated"

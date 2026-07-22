@@ -109,7 +109,7 @@ def _metadata_record() -> ContextRecord:
         original_code="    value = 1\n    return value\n",
         language="python",
         line_mapping={3: 10},
-        source_path="tools/compare/large_reference.py",
+        source_path="tests/compare/large_reference.py",
         symbol_name="transform_batch_001",
         original_lines=(10, 11),
         created_at=datetime(2026, 4, 28, tzinfo=UTC),
@@ -158,7 +158,7 @@ async def test_store_get_returns_context_metadata() -> None:
     await store.put(_metadata_record())
     got = await store.get("s1", "meta001")
     assert got is not None
-    assert got.source_path == "tools/compare/large_reference.py"
+    assert got.source_path == "tests/compare/large_reference.py"
     assert got.symbol_name == "transform_batch_001"
     assert got.original_lines == (10, 11)
 
@@ -294,7 +294,7 @@ async def test_store_list_contexts_returns_operational_metadata() -> None:
     assert entry.context_id == "meta001"
     assert entry.redis_key == "ctx:s1:meta001"
     assert entry.language == "python"
-    assert entry.source_path == "tools/compare/large_reference.py"
+    assert entry.source_path == "tests/compare/large_reference.py"
     assert entry.symbol_name == "transform_batch_001"
     assert entry.original_lines == (10, 11)
     assert entry.original_chars == len("    value = 1\n    return value\n")

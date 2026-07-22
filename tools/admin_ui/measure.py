@@ -293,7 +293,7 @@ def run_measure_compare(left: str, right: str, since: int, verbose: bool) -> str
         uv_command(),
         "run",
         "python",
-        "tools/compare/measure.py",
+        "tests/compare/measure.py",
         "--compare",
         left,
         right,

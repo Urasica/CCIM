@@ -34,6 +34,27 @@ logger = logging.getLogger(__name__)
 _RETRY_AFTER_TEXT_RE = re.compile(r"Please try again in\s+([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
 
 
+class LLMResponse(dict[str, Any]):
+    """Anthropic-shape response with non-serialized upstream measurements."""
+
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_bytes: int,
+        request_bytes_total: int | None = None,
+        request_attempts: int = 1,
+        provider_usage_available: bool,
+    ) -> None:
+        super().__init__(payload)
+        self.request_bytes = request_bytes
+        self.request_bytes_total = (
+            request_bytes if request_bytes_total is None else request_bytes_total
+        )
+        self.request_attempts = request_attempts
+        self.provider_usage_available = provider_usage_available
+
+
 class LLMClient(Protocol):
     """Common interface used by the gateway middleware chain."""
 
@@ -80,7 +101,13 @@ class AnthropicClient:
             f"{self._base_url}/v1/messages", headers=self._headers(), json=body
         )
         resp.raise_for_status()
-        return resp.json()
+        payload = resp.json()
+        usage = payload.get("usage") or {}
+        return LLMResponse(
+            payload,
+            request_bytes=len(resp.request.content),
+            provider_usage_available=isinstance(usage, dict) and "input_tokens" in usage,
+        )
 
     async def stream(self, request: MessagesRequest) -> AsyncIterator[bytes]:
         body = request.model_dump(exclude_none=True, mode="json")
@@ -145,15 +172,29 @@ class OpenAIClient:
             body.get("max_completion_tokens"),
         )
         last_resp: httpx.Response | None = None
+        request_bytes_total = 0
+        request_attempts = 0
         for attempt in range(self._max_rate_limit_retries + 1):
             resp = await self._client.post(
                 f"{self._base_url}/v1/chat/completions",
                 headers=self._headers(),
                 json=body,
             )
+            request_attempts = attempt + 1
+            request_bytes_total += len(resp.request.content)
             last_resp = resp
             if not resp.is_error:
-                return openai_to_anthropic_response(resp.json(), model=request.model)
+                payload = resp.json()
+                usage = payload.get("usage") or {}
+                return LLMResponse(
+                    openai_to_anthropic_response(payload, model=request.model),
+                    request_bytes=len(resp.request.content),
+                    request_bytes_total=request_bytes_total,
+                    request_attempts=request_attempts,
+                    provider_usage_available=(
+                        isinstance(usage, dict) and "prompt_tokens" in usage
+                    ),
+                )
 
             logger.error("OpenAI %s error body: %s", resp.status_code, resp.text[:500])
             if resp.status_code != 429 or attempt >= self._max_rate_limit_retries:

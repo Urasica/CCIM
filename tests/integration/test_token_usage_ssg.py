@@ -21,9 +21,9 @@ from typing import Any, ClassVar
 
 import httpx
 
-# SSG 소스 경로
-_SSG_PY = Path(__file__).parent.parent.parent / "tools" / "ssg" / "ssg.py"
-_AGENT_README = Path(__file__).parent.parent.parent / "tools" / "ssg" / "AGENT_README.md"
+# Clean checkout에 포함되는 결정적 large-code / agent-context fixture.
+_SSG_PY = Path(__file__).parent.parent / "compare" / "large_reference.py"
+_AGENT_README = Path(__file__).parent.parent / "fixtures" / "agent_context.md"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -153,6 +153,11 @@ def _build_app(
     class _Cfg:
         compression_trigger_tokens = compression_trigger
         compression_target_tokens = compression_target
+        compression_enable_retrieve = True
+        current_turn_compression_enabled = False
+        current_turn_compression_trigger_tokens = compression_trigger
+        current_turn_compression_read_tools = "Read,Grep,Glob,LS,Search"
+        compression_cluster_summary_enabled = False
         redis_ttl_seconds = 60
 
     stages = [
@@ -299,12 +304,12 @@ class TestT1TokenMeasurement:
         assert r.status_code == 200
         assert len(stub.received_messages) == 1
 
-        # stub이 받은 system 컨텍스트에 ssg 관련 내용이 있는지 확인
+        # stub이 받은 system 컨텍스트에 large-code fixture 내용이 있는지 확인
         all_text = " ".join(
             m["content"] for m in stub.received_messages[0] if isinstance(m["content"], str)
         )
-        assert "SSG" in all_text or "ssg" in all_text.lower(), (
-            "stub이 받은 요청에 SSG 소스가 없음"
+        assert "LargeRecord" in all_text, (
+            "stub이 받은 요청에 large-code fixture가 없음"
         )
 
         received_tokens = estimate_text_tokens(all_text)
@@ -447,7 +452,7 @@ class TestT2ContextRetention:
 
         stub = _CapturingStub(post_responses)
         app = _build_app(stub)
-        session_id = f"ctx_{uuid.uuid4().hex[:8]}"
+        session_id = f"ctx-{uuid.uuid4().hex[:8]}"
 
         post_topics = [
             "Python 비동기 프로그래밍에 대한 블로그 포스트를 작성해줘",
@@ -710,7 +715,7 @@ class TestT3InjectionDefense:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app),
                 base_url="http://test",
-                headers={"x-ccim-session": f"t3-{scenario['name']}"},
+                headers={"x-ccim-session": f"t3-{scenario['name'].replace('_', '-')}"},
             ) as c:
                 r = await c.post(
                     "/v1/messages",
@@ -798,10 +803,10 @@ class TestT3InjectionDefense:
     async def test_t3_ssg_source_as_context_not_blocked(self) -> None:
         """SSG 소스 코드를 system 컨텍스트로 전달해도 차단되지 않아야 함.
 
-        (rm -rf / 패턴이 소스에 있을 수 있으나 benign 컨텍스트임)
+        (큰 synthetic Python source를 benign 컨텍스트로 취급해야 함)
         """
         ssg_source = _SSG_PY.read_text(encoding="utf-8")
-        stub = _CapturingStub([_text_resp("MarkdownParser는 정규식 기반입니다.")])
+        stub = _CapturingStub([_text_resp("LargeRecord 변환 흐름을 설명했습니다.")])
         app = _build_app(stub)
 
         async with httpx.AsyncClient(
@@ -814,7 +819,7 @@ class TestT3InjectionDefense:
                     "model": "stub",
                     "system": f"다음 Python 소스코드:\n```python\n{ssg_source[:8000]}\n```",
                     "messages": [
-                        {"role": "user", "content": "MarkdownParser 클래스를 설명해줘"}
+                        {"role": "user", "content": "LargeRecord 변환 흐름을 설명해줘"}
                     ],
                     "max_tokens": 256,
                 },

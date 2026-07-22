@@ -298,6 +298,8 @@ async def test_anthropic_complete_passthrough() -> None:
     out = await client.complete(req)
     assert out == expected
     sent = route.calls.last.request
+    assert out.request_bytes == len(sent.content)
+    assert out.provider_usage_available is True
     assert sent.headers["x-api-key"] == "test-key"
     assert sent.headers["anthropic-version"]
     body = json.loads(sent.content)
@@ -364,6 +366,8 @@ async def test_openai_complete_translates_round_trip() -> None:
     assert out["role"] == "assistant"
     assert out["content"] == [{"type": "text", "text": "hello"}]
     assert out["stop_reason"] == "end_turn"
+    assert out.request_bytes == len(route.calls.last.request.content)
+    assert out.provider_usage_available is True
     # Request body sent to upstream is in OpenAI shape
     sent = json.loads(route.calls.last.request.content)
     assert sent["model"] == "gpt-4.1"
@@ -453,6 +457,10 @@ async def test_openai_complete_retries_rate_limit_then_succeeds() -> None:
 
     assert out["content"] == [{"type": "text", "text": "hello"}]
     assert route.call_count == 2
+    assert out.request_attempts == 2
+    assert out.request_bytes_total == sum(
+        len(call.request.content) for call in route.calls
+    )
     sleep_mock.assert_awaited_once_with(4.224)
     await client.aclose()
 

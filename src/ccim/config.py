@@ -47,6 +47,9 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://ccim:ccim@localhost:5432/ccim",
         alias="CCIM_DATABASE_URL",
     )
+    telemetry_drain_timeout_s: float = Field(
+        default=5.0, alias="CCIM_TELEMETRY_DRAIN_TIMEOUT_S"
+    )
 
     # ── PCFI
     llamaguard_url: str = Field(

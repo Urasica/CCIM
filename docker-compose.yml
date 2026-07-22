@@ -1,52 +1,97 @@
 services:
   redis:
-    image: redis/redis-stack:7.4.0-v1
-    container_name: ccim-redis
-    ports:
-      - "6379:6379"
-      - "8001:8001"  # RedisInsight
+    image: redis:7.4-alpine
+    restart: unless-stopped
     volumes:
       - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
+    networks:
+      - backend
 
   postgres:
     image: postgres:17-alpine
-    container_name: ccim-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ccim
-      POSTGRES_PASSWORD: ccim
+      POSTGRES_PASSWORD: ${CCIM_POSTGRES_PASSWORD:-ccim-local-only}
       POSTGRES_DB: ccim
-    ports:
-      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ccim"]
+      test: ["CMD-SHELL", "pg_isready -U ccim -d ccim"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
+    networks:
+      - backend
+
+  migrate:
+    image: ccim:${CCIM_IMAGE_TAG:-local}
+    build:
+      context: .
+      args:
+        VCS_REF: ${CCIM_IMAGE_TAG:-local}
+    command: ["python", "-m", "ccim.migrations", "apply"]
+    environment:
+      CCIM_DATABASE_URL: postgresql+psycopg://ccim:${CCIM_POSTGRES_PASSWORD:-ccim-local-only}@postgres:5432/ccim
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - backend
 
   gateway:
-    build: .
-    container_name: ccim-gateway
+    image: ccim:${CCIM_IMAGE_TAG:-local}
+    build:
+      context: .
+      args:
+        VCS_REF: ${CCIM_IMAGE_TAG:-local}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CCIM_HOST: 0.0.0.0
+      CCIM_PORT: 8080
+      CCIM_REDIS_URL: redis://redis:6379/0
+      CCIM_DATABASE_URL: postgresql+psycopg://ccim:${CCIM_POSTGRES_PASSWORD:-ccim-local-only}@postgres:5432/ccim
+      CCIM_EVIDENCE_STORE_PATH: /var/lib/ccim/evidence/evidence.sqlite3
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - evidence-data:/var/lib/ccim/evidence
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    env_file: .env
-    environment:
-      CCIM_REDIS_URL: redis://redis:6379/0
-      CCIM_DATABASE_URL: postgresql+asyncpg://ccim:ccim@postgres:5432/ccim
-    ports:
-      - "8081:8081"
-    profiles: ["full"]  # 기본은 인프라만, 게이트웨이는 `--profile full`로
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+    networks:
+      - backend
+      - edge
+
+networks:
+  backend:
+    internal: true
+  edge:
 
 volumes:
   redis-data:
   postgres-data:
+  evidence-data:

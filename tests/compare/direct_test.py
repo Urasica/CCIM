@@ -14,9 +14,9 @@ should_compress: total > threshold → 후보 탐색 (last_user_idx = 4)
   → message[2] (ToolResultBlock, Python 1761줄) → 압축 발동
 
 사용법:
-    python tools/compare/direct_test.py
-    python tools/compare/direct_test.py --url http://localhost:8081 --session test-001
-    python tools/compare/direct_test.py --no-db  # DB 쿼리 없이 API 응답만 출력
+    python tests/compare/direct_test.py
+    python tests/compare/direct_test.py --url http://localhost:8081 --session test-001
+    python tests/compare/direct_test.py --no-db  # DB 쿼리 없이 API 응답만 출력
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def build_messages(reference_content: str) -> list[dict]:
         # [0] 최초 user 요청
         {
             "role": "user",
-            "content": "v1/tools/compare/reference_pipeline.py 파일을 읽고 Pipeline 클래스 구조를 분석해줘."
+            "content": "tests/compare/reference_pipeline.py 파일을 읽고 Pipeline 클래스 구조를 분석해줘."
         },
         # [1] assistant: Read 도구 호출 (Claude Code 패턴 재현)
         {
@@ -67,7 +67,7 @@ def build_messages(reference_content: str) -> list[dict]:
                     "type": "tool_use",
                     "id": "toolu_direct_01",
                     "name": "Read",
-                    "input": {"file_path": "v1/tools/compare/reference_pipeline.py"}
+                    "input": {"file_path": "tests/compare/reference_pipeline.py"}
                 }
             ]
         },
@@ -194,7 +194,7 @@ def print_result(resp: dict, db_row: dict | None) -> None:
     print(f"  입력 토큰  : {input_t}")
     print(f"  출력 토큰  : {output_t}")
 
-    # DB 기반 (정확한 압축 전/후 비교)
+    # DB 기반 추정치와 upstream 실측값
     if db_row:
         orig = db_row.get("tokens_input_original") or 0
         comp = db_row.get("tokens_input_compressed") or 0
@@ -202,24 +202,57 @@ def print_result(resp: dict, db_row: dict | None) -> None:
         pct = saved / orig * 100 if orig else 0
         retrieve = db_row.get("retrieve_original_calls", 0)
 
-        print("\n  [DB 텔레메트리]")
-        print(f"  입력 (원본)  : {orig:,} t")
-        print(f"  입력 (압축후): {comp:,} t")
-        print(f"  절감        : {saved:,} t  ({pct:.1f}%)")
+        print("\n  [DB 추정 토큰]")
+        print(f"  입력 (원본 추정)  : {orig:,} t")
+        print(f"  입력 (압축후 추정): {comp:,} t")
+        print(f"  추정 절감         : {saved:,} t  ({pct:.1f}%)")
         print(f"  지연        : {db_row.get('latency_ms', '?')} ms")
         print(f"  retrieve 호출: {retrieve}")
+        print_actual_measurements(db_row.get("feature_flags") or {})
 
         if saved > 0:
-            goal = "✓ 압축 발동!" if pct >= 10 else f"△ 압축 발동 ({pct:.1f}%)"
+            goal = "OK 압축 발동!" if pct >= 10 else f"WARN 압축 발동 ({pct:.1f}%)"
             print(f"\n  {goal}")
         else:
-            print("\n  ✗ 압축 미발동 — CCIM 로그를 확인하세요")
+            print("\n  NO 압축 미발동 — CCIM 로그를 확인하세요")
             print("    예상 로그: '[compress] N candidate message(s) selected'")
             print_compression_diagnostics(db_row)
     else:
         print("\n  (DB 조회 생략 또는 실패 — --no-db 옵션 또는 DB 미연결)")
 
     print("=" * 56 + "\n")
+
+
+def print_actual_measurements(flags: dict) -> None:
+    """Print exact wire bytes and provider-reported usage from upstream calls."""
+    request_calls = int(flags.get("upstream_request_calls", 0) or 0)
+    measured_calls = int(flags.get("upstream_request_bytes_measured_calls", 0) or 0)
+    usage_calls = int(flags.get("provider_usage_available_calls", 0) or 0)
+
+    print("\n  [upstream 실측]")
+    if measured_calls:
+        print(
+            "  전송 body bytes: "
+            f"initial={int(flags.get('upstream_request_bytes_initial', 0) or 0):,}, "
+            f"total={int(flags.get('upstream_request_bytes_total', 0) or 0):,}"
+        )
+        print(f"  측정 호출 수      : {measured_calls}/{request_calls}")
+        print(
+            "  HTTP 시도 수      : "
+            f"{int(flags.get('upstream_http_attempts', 0) or 0)}"
+        )
+    else:
+        print("  전송 body bytes   : unavailable")
+
+    if usage_calls:
+        print(
+            "  provider usage    : "
+            f"input={int(flags.get('provider_input_tokens_total', 0) or 0):,}, "
+            f"output={int(flags.get('provider_output_tokens_total', 0) or 0):,}"
+        )
+        print(f"  usage 제공 호출 수: {usage_calls}/{request_calls}")
+    else:
+        print("  provider usage    : unavailable")
 
 
 def print_compression_diagnostics(db_row: dict) -> None:
@@ -257,12 +290,15 @@ def print_compression_diagnostics(db_row: dict) -> None:
 # ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(description="CCIM ToolResultBlock 압축 직접 검증")
     parser.add_argument("--url", default="http://localhost:8081", help="CCIM 게이트웨이 URL")
     parser.add_argument("--session", default="", help="세션 ID (기본: direct-<timestamp>)")
     parser.add_argument(
         "--reference",
-        default="tools/compare/reference_pipeline.py",
+        default="tests/compare/reference_pipeline.py",
         help="압축 대상 reference_pipeline.py 경로",
     )
     parser.add_argument("--model", default=default_model(), help="LLM 모델명")

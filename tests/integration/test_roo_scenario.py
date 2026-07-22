@@ -140,6 +140,11 @@ def _build_test_app(stub: _CapturingStub, *, redis: Any = None) -> Any:
     class _Cfg:
         compression_trigger_tokens = 999_999
         compression_target_tokens = 500_000
+        compression_enable_retrieve = True
+        current_turn_compression_enabled = False
+        current_turn_compression_trigger_tokens = 999_999
+        current_turn_compression_read_tools = "Read,Grep,Glob,LS,Search"
+        compression_cluster_summary_enabled = False
         redis_ttl_seconds = 60
 
     stages = [
@@ -203,7 +208,7 @@ async def test_s1_single_file_read_roundtrip() -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
-            headers={"x-ccim-session": "s1_test"},
+            headers={"x-ccim-session": "s1-test"},
         ) as client:
             # 첫 번째 요청: user가 LLM에게 파일 설명 요청
             r = await client.post(
@@ -252,7 +257,7 @@ async def test_s1_tool_then_final_two_turn() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"x-ccim-session": "s1_two"},
+        headers={"x-ccim-session": "s1-two"},
     ) as c:
         # 1차 요청
         r1 = await c.post(
@@ -350,7 +355,7 @@ async def test_s2_parallel_tool_calls() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"x-ccim-session": "s2_par"},
+        headers={"x-ccim-session": "s2-par"},
     ) as c:
         r1 = await c.post(
             "/v1/messages",
@@ -435,6 +440,11 @@ async def test_s3_model_override_in_upstream_request() -> None:
     class _Cfg:
         compression_trigger_tokens = 999_999
         compression_target_tokens = 500_000
+        compression_enable_retrieve = True
+        current_turn_compression_enabled = False
+        current_turn_compression_trigger_tokens = 999_999
+        current_turn_compression_read_tools = "Read,Grep,Glob,LS,Search"
+        compression_cluster_summary_enabled = False
         redis_ttl_seconds = 60
 
     stages = [
@@ -454,7 +464,7 @@ async def test_s3_model_override_in_upstream_request() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"x-ccim-session": "s3_override"},
+        headers={"x-ccim-session": "s3-override"},
     ) as c:
         r = await c.post(
             "/v1/messages",
@@ -480,7 +490,7 @@ async def test_s3_model_override_in_upstream_request() -> None:
 
 async def test_s4_session_id_preserved_across_requests() -> None:
     """같은 session_id로 여러 요청을 보낼 때 헤더가 유지된다."""
-    sid = "roo_session_fixed"
+    sid = "roo-session-fixed"
     stub = _CapturingStub([
         _text_resp("첫 번째 응답"),
         _text_resp("두 번째 응답"),
@@ -527,7 +537,7 @@ async def test_s5_streaming_with_tool_use_response() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"x-ccim-session": "s5_stream"},
+        headers={"x-ccim-session": "s5-stream"},
     ) as c, c.stream(
         "POST",
         "/v1/messages",
@@ -596,7 +606,7 @@ async def test_s6_injection_in_tool_result_blocked() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"x-ccim-session": "s6_inject"},
+        headers={"x-ccim-session": "s6-inject"},
     ) as c:
         r = await c.post(
             "/v1/messages",
@@ -644,7 +654,7 @@ async def test_s6_benign_tool_result_allowed() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
-        headers={"x-ccim-session": "s6_benign"},
+        headers={"x-ccim-session": "s6-benign"},
     ) as c:
         r = await c.post(
             "/v1/messages",

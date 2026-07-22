@@ -11,7 +11,7 @@ The code models a deterministic event-processing pipeline:
 * aggregators produce summary counters for downstream reporting;
 * a small runner wires these pieces together for tests and examples.
 
-The comparison task in tools/compare/task.md copies this file into a workspace
+The comparison task in tests/compare/task.md copies this file into a workspace
 and modifies only the copy. Do not use this file as application code.
 """
 
@@ -20,12 +20,12 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from statistics import mean
 from typing import Any
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     """Severity attached to a decision."""
 
     INFO = "info"
@@ -33,7 +33,7 @@ class Severity(str, Enum):
     ERROR = "error"
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     """Action returned by rule evaluation."""
 
     ACCEPT = "accept"

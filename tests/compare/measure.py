@@ -1,10 +1,10 @@
 """토큰 사용량 비교 측정 스크립트.
 
 사용법:
-    python tools/compare/measure.py                    # 최근 2시간 전체 요약
-    python tools/compare/measure.py --session baseline  # 특정 세션 프리픽스
-    python tools/compare/measure.py --since 30          # 최근 30분
-    python tools/compare/measure.py --compare baseline compressed  # 두 세션 비교
+    python tests/compare/measure.py                    # 최근 2시간 전체 요약
+    python tests/compare/measure.py --session baseline  # 특정 세션 프리픽스
+    python tests/compare/measure.py --since 30          # 최근 30분
+    python tests/compare/measure.py --compare baseline compressed  # 두 세션 비교
 
 PostgreSQL 연결:
     CCIM_DATABASE_URL 환경변수 또는 기본값 사용

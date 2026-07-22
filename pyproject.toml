@@ -67,6 +67,7 @@ packages = ["src/ccim"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+extend-exclude = ["tests/compare/workspace"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
@@ -89,6 +90,15 @@ markers = [
     "ollama: requires running Ollama instance",
     "slow: takes >1s",
 ]
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = ["ccim"]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
 
 [dependency-groups]
 dev = [

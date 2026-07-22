@@ -1,4 +1,4 @@
-"""Apply the compare task patch inside tools/compare/workspace/current.
+"""Apply the compare task patch inside tests/compare/workspace/current.
 
 This script is intentionally deterministic. It keeps the task focused on
 reading the reference file through the agent while avoiding repeated edit-tool
@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKSPACE = ROOT / "tools" / "compare" / "workspace" / "current"
+WORKSPACE = ROOT / "tests" / "compare" / "workspace" / "current"
 TARGET = WORKSPACE / "reference_pipeline_patched.py"
 TEST_FILE = WORKSPACE / "test_reference_pipeline.py"
 

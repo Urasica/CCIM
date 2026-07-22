@@ -14,7 +14,6 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -1164,6 +1163,14 @@ class ForwardAndInterceptMiddleware:
                     if requested_stream
                     else None
                 ),
+                "upstream_request_calls": 0,
+                "upstream_request_bytes_initial": 0,
+                "upstream_request_bytes_total": 0,
+                "upstream_request_bytes_measured_calls": 0,
+                "upstream_http_attempts": 0,
+                "provider_input_tokens_total": 0,
+                "provider_output_tokens_total": 0,
+                "provider_usage_available_calls": 0,
                 "retrieve_loop_limit": self._max_loops,
                 "retrieve_loop_iterations": 0,
                 "retrieve_original_tool_uses": 0,
@@ -1196,6 +1203,29 @@ class ForwardAndInterceptMiddleware:
         for loop_idx in range(self._max_loops):
             flags["retrieve_loop_iterations"] = loop_idx + 1
             response_dict = await self._client.complete(working_request)
+            flags["upstream_request_calls"] += 1
+
+            request_bytes = getattr(response_dict, "request_bytes", None)
+            if isinstance(request_bytes, int) and request_bytes >= 0:
+                if flags["upstream_request_bytes_measured_calls"] == 0:
+                    flags["upstream_request_bytes_initial"] = request_bytes
+                flags["upstream_request_bytes_total"] += int(
+                    getattr(response_dict, "request_bytes_total", request_bytes)
+                )
+                flags["upstream_http_attempts"] += int(
+                    getattr(response_dict, "request_attempts", 1)
+                )
+                flags["upstream_request_bytes_measured_calls"] += 1
+
+            usage = response_dict.get("usage") or {}
+            if getattr(response_dict, "provider_usage_available", False):
+                flags["provider_input_tokens_total"] += int(
+                    usage.get("input_tokens", 0) or 0
+                )
+                flags["provider_output_tokens_total"] += int(
+                    usage.get("output_tokens", 0) or 0
+                )
+                flags["provider_usage_available_calls"] += 1
 
             # retrieve_original tool_use 블록 탐색
             content = response_dict.get("content") or []
@@ -1768,16 +1798,26 @@ class WriteRemapMiddleware:
 
 
 class TelemetryMiddleware:
-    """설계 §3.3 — PostgreSQL INSERT (fire-and-forget)."""
+    """PostgreSQL INSERT queue with observable shutdown drain."""
 
     name = "telemetry"
 
-    def __init__(self, logger: Any) -> None:  # RequestLogger
+    def __init__(self, logger: Any, *, enabled: bool = True) -> None:  # RequestLogger
         self._logger = logger
+        self._enabled = enabled
         self._pending_tasks: set[Any] = set()
+        self._scheduled = 0
+        self._succeeded = 0
+        self._failed = 0
+        self._dropped = 0
+        self._skipped = 0
+        self._drain_timeouts = 0
 
     async def __call__(self, ctx: RequestContext, call_next: NextCallable) -> None:
         await call_next(ctx)
+        if not self._enabled:
+            self._skipped += 1
+            return
         # 응답 경로를 막지 않도록 background task로 기록한다.
         self._schedule_log(ctx)
 
@@ -1785,8 +1825,37 @@ class TelemetryMiddleware:
         import asyncio
 
         task = asyncio.create_task(self._fire_and_forget(ctx))
+        self._scheduled += 1
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
+
+    def snapshot(self) -> dict[str, int | bool]:
+        return {
+            "enabled": self._enabled,
+            "pending": len(self._pending_tasks),
+            "scheduled": self._scheduled,
+            "succeeded": self._succeeded,
+            "failed": self._failed,
+            "dropped": self._dropped,
+            "skipped": self._skipped,
+            "drain_timeouts": self._drain_timeouts,
+        }
+
+    async def drain(self, timeout_s: float) -> dict[str, int | bool]:
+        """Wait for queued writes, cancelling and counting leftovers on timeout."""
+        import asyncio
+
+        pending = tuple(self._pending_tasks)
+        if not pending:
+            return self.snapshot()
+        _, still_pending = await asyncio.wait(pending, timeout=max(timeout_s, 0.0))
+        if still_pending:
+            self._drain_timeouts += 1
+            self._dropped += len(still_pending)
+            for task in still_pending:
+                task.cancel()
+            await asyncio.gather(*still_pending, return_exceptions=True)
+        return self.snapshot()
 
     async def _fire_and_forget(self, ctx: RequestContext) -> None:
         from ccim.telemetry.logger import RequestRecord
@@ -1807,9 +1876,13 @@ class TelemetryMiddleware:
             write_remaps=ctx.write_remaps,
             feature_flags=ctx.extras.get("feature_flags", {}),
         )
-        # 실패해도 메인 응답 경로에 영향 없음
-        with suppress(Exception):
+        try:
             await self._logger.log(record)
+        except Exception:
+            self._failed += 1
+            logging.getLogger(__name__).exception("Telemetry write failed")
+        else:
+            self._succeeded += 1
 
 
 # ─────────────────────────────────────────────────────────────────────

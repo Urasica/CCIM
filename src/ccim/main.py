@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from typing import Any
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from ccim import __version__
 from ccim.api.routes import router as messages_router
@@ -32,13 +34,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       - Redis pool close
     """
     settings = get_settings()
+    redis_status = "unavailable"
+    postgres_status = "unavailable"
+    migration_state: dict[str, Any] = {
+        "status": "unavailable",
+        "current": False,
+        "expected_versions": (),
+        "applied_versions": (),
+        "missing_versions": (),
+        "unexpected_versions": (),
+        "checksum_mismatches": (),
+    }
 
     # ── Redis ────────────────────────────────────────────────────────
     try:
         import redis.asyncio as aioredis
         redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
         await redis_client.ping()
-        logger.info("Redis connected: %s", settings.redis_url)
+        redis_status = "connected"
+        logger.info("Redis connected")
     except Exception as exc:
         logger.warning("Redis unavailable (%s) — reversibility disabled", exc)
         redis_client = None  # type: ignore[assignment]
@@ -47,7 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db_engine = None
     try:
         from sqlalchemy.ext.asyncio import create_async_engine
-        logger.info("PostgreSQL connecting: %s", settings.database_url)
+        logger.info("PostgreSQL connecting")
         db_engine = create_async_engine(
             settings.database_url,
             pool_pre_ping=True,
@@ -59,6 +73,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             result = await conn.execute(text("SELECT version()"))
             pg_ver = result.scalar()
             logger.info("PostgreSQL connected: %s", pg_ver)
+        postgres_status = "connected"
+
+        from ccim.migrations import discover_migrations, inspect_async_engine
+
+        inspected = await inspect_async_engine(db_engine, discover_migrations())
+        migration_state = inspected.as_json()
+        if not inspected.current:
+            logger.warning("PostgreSQL migrations are not current: %s", migration_state)
     except Exception:
         logger.warning("PostgreSQL unavailable — telemetry disabled", exc_info=True)
 
@@ -143,7 +165,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Telemetry logger
     req_logger: RequestLogger | None = None
-    if db_engine is not None:
+    if db_engine is not None and bool(migration_state.get("current")):
         req_logger = RequestLogger(engine=db_engine)
 
     compression_runtime_enabled = (
@@ -151,6 +173,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     # ── 미들웨어 체인 조립 ─────────────────────────────────────────
+    telemetry = TelemetryMiddleware(
+        logger=req_logger or _NullLogger(), enabled=req_logger is not None
+    )
     stages = [
         PCFIMiddleware(enforcer=pcfi_enforcer),
         CompressMiddleware(
@@ -163,7 +188,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         CurrentTurnWriteGuardMiddleware(settings=settings),
         OrphanMarkerScanMiddleware(store=store),
         WriteRemapMiddleware(mapper=mapper),
-        TelemetryMiddleware(logger=req_logger or _NullLogger()),
+        telemetry,
     ]
     app.state.chain = MiddlewareChain(stages=stages)
     app.state.llm_client = llm_client
@@ -171,12 +196,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_engine = db_engine
     app.state.compression_enabled = compression_runtime_enabled
     app.state.telemetry_enabled = req_logger is not None
+    app.state.redis_status = redis_status
+    app.state.postgres_status = postgres_status
+    app.state.migration_state = migration_state
+    app.state.telemetry_runtime = telemetry
 
     logger.info("CCIM Gateway v%s ready (chain: %s)", __version__, " → ".join(s.name for s in stages))
 
     yield
 
     # ── 종료 정리 ────────────────────────────────────────────────────
+    telemetry_shutdown = await telemetry.drain(settings.telemetry_drain_timeout_s)
+    app.state.telemetry_shutdown = telemetry_shutdown
+    if telemetry_shutdown["failed"] or telemetry_shutdown["dropped"]:
+        logger.warning("Telemetry shutdown completed with loss: %s", telemetry_shutdown)
+    else:
+        logger.info("Telemetry shutdown drain complete: %s", telemetry_shutdown)
     with suppress(Exception):
         await llm_client.aclose()
     if guard is not None:
@@ -200,15 +235,27 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    @app.get("/live", tags=["meta"])
+    async def live() -> dict[str, object]:
+        return {"status": "live", "version": settings.version}
+
+    @app.get("/ready", tags=["meta"], response_model=None)
+    async def ready() -> JSONResponse:
+        payload, status_code = _readiness_payload(app, settings)
+        return JSONResponse(content=payload, status_code=status_code)
+
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, object]:
+        readiness, _ = _readiness_payload(app, settings)
         return {
-            "status": "ok",
+            "status": readiness["status"],
             "version": settings.version,
             "redis_connected": getattr(app.state, "redis", None) is not None,
             "postgres_connected": getattr(app.state, "db_engine", None) is not None,
             "compression_enabled": bool(getattr(app.state, "compression_enabled", False)),
             "telemetry_enabled": bool(getattr(app.state, "telemetry_enabled", False)),
+            "migration_status": readiness["dependencies"]["migrations"]["status"],
+            "telemetry": readiness["telemetry"],
         }
 
     app.include_router(messages_router)
@@ -222,6 +269,67 @@ def create_app() -> FastAPI:
     )
 
     return app
+
+
+def _readiness_payload(app: FastAPI, settings: Any) -> tuple[dict[str, Any], int]:
+    redis_connected = getattr(app.state, "redis", None) is not None
+    postgres_connected = getattr(app.state, "db_engine", None) is not None
+    migration_state = getattr(
+        app.state,
+        "migration_state",
+        {"status": "unavailable", "current": False},
+    )
+    telemetry_runtime = getattr(app.state, "telemetry_runtime", None)
+    telemetry = (
+        telemetry_runtime.snapshot()
+        if telemetry_runtime is not None
+        else {
+            "enabled": False,
+            "pending": 0,
+            "scheduled": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "dropped": 0,
+            "skipped": 0,
+            "drain_timeouts": 0,
+        }
+    )
+    redis_required = bool(settings.compression_enabled)
+    ready = (
+        (redis_connected or not redis_required)
+        and postgres_connected
+        and bool(migration_state.get("current"))
+        and bool(telemetry.get("enabled"))
+    )
+    payload = {
+        "status": "ready" if ready else "degraded",
+        "version": settings.version,
+        "dependencies": {
+            "redis": {
+                "status": "connected" if redis_connected else "unavailable",
+                "required": redis_required,
+            },
+            "postgres": {
+                "status": "connected" if postgres_connected else "unavailable",
+                "required": True,
+            },
+            "migrations": {
+                "status": migration_state.get("status", "unavailable"),
+                "current": bool(migration_state.get("current")),
+                "required": True,
+            },
+        },
+        "features": {
+            "compression_enabled": bool(
+                getattr(app.state, "compression_enabled", False)
+            ),
+            "telemetry_enabled": bool(
+                getattr(app.state, "telemetry_enabled", False)
+            ),
+        },
+        "telemetry": telemetry,
+    }
+    return payload, 200 if ready else 503
 
 
 app = create_app()

@@ -16,14 +16,23 @@
 
 완료 증거: migration fixture 또는 check command, Admin 상태 테스트, telemetry 실패/flush 테스트.
 
-### 2. Provider와 write tool 호환성
+### 2. 단일 AWS VM CI/CD와 예산 제한 canary
+
+- 로컬 개발, GitHub Actions CI, ECR image 게시, OIDC/Systems Manager 기반 단일 EC2 자동 배포를 연결한다.
+- pull request는 CI만 실행하고 `main` 성공 commit만 immutable digest로 배포한다.
+- migration/readiness 실패 시 직전 digest로 rollback하고 결과를 추적한다.
+- GPT-5 mini 계열의 하루 250만 무료 공유 token 한도 안에서 동일 task의 baseline/compressed A/B를 매일 실행한다.
+
+완료 증거: CI run, image digest, Systems Manager command ID, readiness 결과, rollback 훈련, UTC 일일 token ledger와 30일 집계.
+
+### 3. Provider와 write tool 호환성
 
 - OpenAI-compatible provider의 실제 지원 response shape, streaming, usage, tool call 경계를 fixture matrix로 명시한다.
 - `Edit`, `MultiEdit`, `Write`와 host별 변형의 schema를 fixture로 만들고, 안전하게 해석하지 못하는 write는 차단 또는 명시적 unsupported 처리한다.
 
 완료 증거: provider/write compatibility 문서, 결정적 변환·guard regression tests.
 
-### 3. Evidence 운영 안정성
+### 4. Evidence 운영 안정성
 
 - Redis/persistent store 간 reload, TTL, 삭제, 저장량, document version 변화를 Admin UI와 trace에서 명확히 보여준다.
 - 문서·로그·메일 span의 heuristic은 사실 보존 fixture를 늘리며 보수적으로 확장한다.

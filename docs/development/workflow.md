@@ -18,18 +18,63 @@
 ## 기본 검증 명령
 
 ```powershell
+uv lock --check
+uv run ruff check src tests tools/admin_ui tests/compare
+uv run python scripts/check_markdown_links.py
 uv run pytest tests/unit -q
-uv run ruff check src tests tools/admin_ui tools/compare
+uv run pytest tests/integration -m "not integration and not ollama" -q
 uv run python -m py_compile src/ccim/middleware/chain.py tools/admin_ui/html.py
-uv run python tools/compare/check_task2_semantics.py tools/compare/workspace/q2
+uv run python tests/compare/check_task2_semantics.py tests/fixtures/task2_golden
+git diff --check
 ```
+
+Windows에서는 위 순서를 `scripts/verify.ps1`로 실행할 수 있다. 실제 Redis/PostgreSQL migration fixture와 SHA image smoke는 `.github/workflows/ci.yml`의 분리된 job에서 실행한다.
 
 변경한 영역에 맞는 좁은 테스트를 먼저 실행한다. 예를 들어 middleware 변경은 `tests/unit/test_middleware_chain.py`, evidence 저장소 변경은 `tests/unit/test_reversibility.py`, Admin UI 변경은 `tests/unit/test_admin_ui_app.py`와 `tests/unit/test_admin_measure.py`를 우선한다.
 
 ## 수동 운영 확인
 
 - Admin UI: `uv run python tools/admin_server.py`
-- A/B measure: `uv run python tools/compare/measure.py --compare <left> <right> --since 120 --verbose`
-- 직접 압축 경로: `uv run python tools/compare/direct_test.py --session direct-check`
+- A/B measure: `uv run python tests/compare/measure.py --compare <left> <right> --since 120 --verbose`
+- 직접 압축 경로: `uv run python tests/compare/direct_test.py --session direct-check`
 
 PowerShell에서 한글이 깨져 보이면 파일 인코딩을 변경하지 말고 먼저 콘솔 출력 인코딩을 UTF-8로 설정해 확인한다. 저장소 문서는 UTF-8로 유지한다.
+
+## CI/CD 흐름
+
+### 로컬과 CI
+
+1. 로컬 branch에서 구현하고 가장 좁은 관련 테스트부터 실행한다.
+2. branch push와 pull request에서 Ruff, unit test, 외부 LLM 없는 integration, semantic checker, Docker image smoke를 실행한다.
+3. CI 결과와 익명화된 test report만 artifact로 보관한다. `.env`, prompt, 원문 code, API key는 artifact에 포함하지 않는다.
+4. pull request와 일반 branch push에서는 운영 배포 권한을 사용하지 않는다.
+
+### main 자동 배포
+
+1. `main` 반영 후 동일한 검증을 다시 통과한 commit으로 image를 한 번만 빌드한다.
+2. image를 AWS ECR에 commit SHA tag와 immutable digest로 게시한다.
+3. GitHub Actions가 OIDC로 repository와 production environment에 제한된 AWS deploy role을 얻는다.
+4. Systems Manager Run Command가 tag로 지정한 단일 EC2 VM에 배포 명령을 전달한다.
+5. VM은 대상 digest를 pull하고 migration check 뒤 Docker Compose 서비스를 갱신한다.
+6. `/live`와 `/ready` smoke를 통과하면 정상 digest를 기록한다.
+7. 실패하면 직전 정상 digest로 rollback하고 배포 결과를 실패로 남긴다.
+
+배포 workflow는 동시 실행을 1개로 제한하고, 새 배포가 진행 중인 배포의 migration·rollback 구간을 덮어쓰지 않게 한다. 장기 AWS access key와 배포용 SSH private key는 GitHub secret에 저장하지 않는다.
+
+### 예약 운영 검증
+
+예약된 GitHub Actions 또는 수동 `workflow_dispatch`는 같은 OIDC/Systems Manager 경로로 VM 내부의 일일 canary runner를 실행한다. gateway를 CI runner에 공개하지 않고 VM의 loopback endpoint를 사용한다. 실제 model 호출은 [GPT-5 mini 일일 운영 검증 계획](../evaluation/daily-gpt5-mini-canary.md)의 사전 예산 검사와 hard stop을 통과해야 한다.
+
+## Migration과 상태 계약
+
+```powershell
+uv run python -m ccim.migrations check
+uv run python -m ccim.migrations apply
+```
+
+`apply`는 PostgreSQL advisory transaction lock을 얻고 migration checksum ledger에 없는 파일만 적용한다. 이미 idempotent SQL이 적용된 기존 DB는 다시 실행해 ledger에 채택하며, 적용된 version의 checksum이 달라졌으면 중단한다.
+
+- `/live`: 프로세스 event loop가 응답 가능한지만 확인한다.
+- `/ready`: Redis, PostgreSQL, migration, telemetry writer 상태를 확인한다.
+- 압축이 활성화된 상태에서 Redis가 없거나 PostgreSQL/migration/telemetry가 준비되지 않으면 `/ready`는 `503 degraded`다.
+- shutdown은 제한 시간 동안 telemetry background write를 drain하고 실패·drop·timeout 수를 상태와 log에 남긴다.
