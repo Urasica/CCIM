@@ -30,16 +30,17 @@ CCIM는 LLM API gateway로 개발합니다. Anthropic Messages 호환 요청을 
 
 ## 확정된 운영 방향
 
-아래 운영 방향은 확정됐지만 아직 전체 자동화가 구현된 상태는 아닙니다.
+아래 delivery 자동화는 repository에 구현되어 있으며, 실제 운영에는 선택한 cloud VM과 production runner의 1회 설정이 필요합니다.
 
 - 개발과 검증은 로컬 작업 트리에서 수행합니다.
 - pull request와 일반 branch push는 자동 CI만 수행합니다.
-- `main` 반영 후 CI를 통과한 commit만 container image로 만들고 AWS ECR에 commit SHA와 digest로 게시합니다.
-- GitHub Actions는 OIDC로 단기 AWS 권한을 얻고, Systems Manager Run Command로 단일 AWS EC2 VM의 Docker Compose 배포를 갱신합니다.
+- `master` 반영 후 CI를 통과한 commit만 container image로 만들고 GHCR에 commit SHA와 immutable digest로 게시합니다.
+- AWS, GCP, Oracle Cloud 등 어느 Linux VM에서도 같은 production self-hosted runner와 Docker Compose 배포 절차를 사용합니다.
 - 배포 후 migration과 readiness smoke가 실패하면 직전 image digest로 되돌립니다.
 - Redis, PostgreSQL과 evidence volume은 같은 VM의 private network에 두고 공용 포트로 노출하지 않습니다.
+- PostgreSQL·Redis·evidence backup은 `age`로 암호화하고 외부 보관 위치는 선택한 cloud에 맞게 정합니다.
 
-운영 배포 결정은 [ADR-0002](docs/decisions/ADR-0002-single-aws-vm-cicd.md), GPT-5 mini 일일 검증 작업과 하루 250만 무료 공유 token 한도는 [일일 운영 검증 계획](docs/evaluation/daily-gpt5-mini-canary.md)에 기록합니다.
+운영 배포 결정은 [ADR-0003](docs/decisions/ADR-0003-cloud-neutral-single-vm-delivery.md), 실제 VM 준비 절차는 [클라우드 중립 단일 VM delivery](docs/development/single-vm-delivery.md), GPT-5 mini 일일 검증 작업과 하루 250만 무료 공유 token 한도는 [일일 운영 검증 계획](docs/evaluation/daily-gpt5-mini-canary.md)에 기록합니다.
 
 ## 왜 필요한가
 
@@ -310,7 +311,7 @@ uv run python -m ccim.operations dry-run --json
 uv run python -m ccim.operations report --window-days 30 --json
 ```
 
-이 명령은 외부 LLM이나 실제 개인 데이터를 사용하지 않습니다. run category, 성공·실패·skip·retry·incomplete, telemetry completeness, gross/retrieve/net token 계산, 예산 hard stop과 비식별 artifact 형식을 mock data로 검증합니다. 실제 daily canary와 personal-production 기록은 AWS 배포와 호환성 검증을 마친 뒤 마지막 운영 단계에서 시작합니다.
+이 명령은 외부 LLM이나 실제 개인 데이터를 사용하지 않습니다. run category, 성공·실패·skip·retry·incomplete, telemetry completeness, gross/retrieve/net token 계산, 예산 hard stop과 비식별 artifact 형식을 mock data로 검증합니다. 실제 daily canary와 personal-production 기록은 단일 VM 배포와 호환성 검증을 마친 뒤 마지막 운영 단계에서 시작합니다.
 
 Measure UI에서 prefix를 넣어 비교하고 markdown report로 export할 수 있습니다.
 CLI로는 다음처럼 확인합니다.
@@ -349,6 +350,8 @@ uv run python tests/compare/direct_test.py --session direct-check
 | `migrations/002_request_operational_metrics.sql` | feature_flags 기반 운영 지표 view |
 | `migrations/003_operational_data_readiness.sql` | run·request observation·UTC token ledger와 운영 집계 view |
 | `src/ccim/operations/` | 운영 run 계약, budget preflight, mock dry-run, 비식별 report와 저장소 |
+| `.github/workflows/delivery.yml` | 성공한 `master` CI SHA의 GHCR 게시와 production VM 배포 |
+| `deploy/single-vm/` | digest 배포·rollback, VM mock canary, 암호화 backup/restore |
 | `tools/admin_server.py` | Admin UI 서버 진입점 |
 | `tools/admin_ui/` | Admin UI 정적 파일과 측정 UI |
 | `tests/compare/` | benchmark, measure, task fixture, semantic checker |

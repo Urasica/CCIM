@@ -52,21 +52,22 @@ PowerShell에서 한글이 깨져 보이면 파일 인코딩을 변경하지 말
 3. CI 결과와 익명화된 test report만 artifact로 보관한다. `.env`, prompt, 원문 code, API key는 artifact에 포함하지 않는다.
 4. pull request와 일반 branch push에서는 운영 배포 권한을 사용하지 않는다.
 
-### main 자동 배포
+### `master` 자동 배포
 
-1. `main` 반영 후 동일한 검증을 다시 통과한 commit으로 image를 한 번만 빌드한다.
-2. image를 AWS ECR에 commit SHA tag와 immutable digest로 게시한다.
-3. GitHub Actions가 OIDC로 repository와 production environment에 제한된 AWS deploy role을 얻는다.
-4. Systems Manager Run Command가 tag로 지정한 단일 EC2 VM에 배포 명령을 전달한다.
-5. VM은 대상 digest를 pull하고 migration check 뒤 Docker Compose 서비스를 갱신한다.
-6. `/live`와 `/ready` smoke를 통과하면 정상 digest를 기록한다.
-7. 실패하면 직전 정상 digest로 rollback하고 배포 결과를 실패로 남긴다.
+1. `master` push의 `CI` workflow가 성공한 정확한 `head_sha`만 별도 delivery workflow가 받는다.
+2. GitHub-hosted runner가 image를 한 번 build하고 migration·readiness smoke를 통과한 동일 image를 GHCR SHA tag와 immutable digest로 게시한다.
+3. GitHub `production` environment를 통과한 job만 `self-hosted`, `linux`, `x64`, `ccim-production` label의 단일 VM runner에 배정된다.
+4. VM은 대상 digest를 pull하고 OCI source revision을 확인한 뒤 Docker Compose migration과 서비스를 갱신한다.
+5. `/live`와 `/ready` smoke를 통과하면 정상 digest를 기록한다.
+6. 실패하면 직전 정상 digest로 rollback하고 배포 결과를 실패로 남긴다.
 
-배포 workflow는 동시 실행을 1개로 제한하고, 새 배포가 진행 중인 배포의 migration·rollback 구간을 덮어쓰지 않게 한다. 장기 AWS access key와 배포용 SSH private key는 GitHub secret에 저장하지 않는다.
+배포 workflow는 동시 실행을 1개로 제한하고, 새 배포가 진행 중인 배포의 migration·rollback 구간을 취소하지 않는다. cloud access key와 배포용 SSH private key는 GitHub secret에 저장하지 않는다. VM의 runtime secret과 backup identity는 `/etc/ccim`에만 둔다.
 
 ### 예약 운영 검증
 
-예약된 GitHub Actions 또는 수동 `workflow_dispatch`는 같은 OIDC/Systems Manager 경로로 VM 내부의 일일 canary runner를 실행한다. gateway를 CI runner에 공개하지 않고 VM의 loopback endpoint를 사용한다. 실제 model 호출은 [GPT-5 mini 일일 운영 검증 계획](../evaluation/daily-gpt5-mini-canary.md)의 사전 예산 검사와 hard stop을 통과해야 한다.
+예약된 GitHub Actions 또는 수동 `workflow_dispatch`는 production self-hosted runner에서 VM 내부의 일일 canary를 실행한다. gateway를 GitHub-hosted runner에 공개하지 않고 VM의 loopback endpoint를 사용한다. 실제 model 호출은 [GPT-5 mini 일일 운영 검증 계획](../evaluation/daily-gpt5-mini-canary.md)의 사전 예산 검사와 hard stop을 통과해야 한다.
+
+VM bootstrap, runner 보호, backup/restore와 provider별 준비 경계는 [클라우드 중립 단일 VM delivery](single-vm-delivery.md)를 따른다.
 
 ## Migration과 상태 계약
 

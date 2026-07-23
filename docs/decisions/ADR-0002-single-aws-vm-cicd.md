@@ -1,7 +1,9 @@
 # ADR-0002: 로컬 개발과 단일 AWS VM 자동 배포를 사용한다
 
-- 상태: Accepted
+- 상태: Superseded by [ADR-0003](ADR-0003-cloud-neutral-single-vm-delivery.md)
 - 날짜: 2026-07-22
+
+> 이 결정의 단일 VM·immutable digest·rollback 경계는 유지하지만 AWS ECR·OIDC·Systems Manager 종속 경로는 ADR-0003의 GHCR·self-hosted runner 기반 cloud-neutral delivery로 대체한다.
 
 ## 맥락
 

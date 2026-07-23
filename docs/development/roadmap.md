@@ -27,15 +27,16 @@
 
 완료 증거: schema/migration fixture, mock dry-run summary, budget preflight 경계 테스트, category별 dummy report와 artifact safety 검사.
 
-### 3. 단일 AWS VM CI/CD
+### 3. 클라우드 중립 단일 VM CI/CD
 
-- 로컬 개발, GitHub Actions CI, ECR image 게시, OIDC/Systems Manager 기반 단일 EC2 자동 배포를 연결한다.
-- pull request는 CI만 실행하고 `main` 성공 commit만 immutable digest로 배포한다.
+- 로컬 개발, GitHub Actions CI, GHCR image 게시와 production self-hosted runner 기반 단일 Linux VM 자동 배포를 연결한다.
+- pull request는 CI만 실행하고 `master` 성공 commit만 immutable digest로 배포한다.
 - migration/readiness 실패 시 직전 digest로 rollback하고 결과를 추적한다.
 - canary runner와 예약 실행 경로는 mock provider와 simulated ledger로 VM 안에서 dry-run한다.
+- PostgreSQL·Redis·evidence backup을 `age`로 암호화하고 선택한 provider의 외부 storage에 보관·복구한다.
 - 외부 LLM 호출과 실제 token ledger 축적은 호환성 검증까지 완료한 뒤 5단계에서 시작한다.
 
-완료 증거: CI run, image digest, Systems Manager command ID, readiness 결과, rollback/restore 훈련, VM canary dry-run.
+완료 증거: CI/delivery run, GHCR image digest, readiness 결과, rollback/restore 훈련, VM canary dry-run.
 
 ### 4. Provider와 write tool 호환성
 

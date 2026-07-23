@@ -6,7 +6,7 @@ Roadmap 02는 실제 운영 수치를 모으는 단계가 아니다. 외부 LLM�
 
 - 허용: deterministic mock provider, synthetic fixture, simulated UTC ledger, `dry-run`·`dummy` 보고서
 - 금지: 외부 provider 호출, 개인 code·prompt 수집, 실제 성과 표기, daily-canary와 personal-production 합산
-- 실제 기록 시작: AWS 배포와 host/provider 호환성까지 검증한 뒤 Roadmap 05
+- 실제 기록 시작: 클라우드 중립 단일 VM 배포와 host/provider 호환성까지 검증한 뒤 Roadmap 05
 
 ## 저장 구조
 
@@ -107,7 +107,7 @@ uv run python -m ccim.operations budget-check `
   --json
 ```
 
-JSON 출력은 `ok`, `schema_version`, `command`, `data`, `warnings`, `errors`를 고정한다. `budget-check`가 호출을 차단하거나 입력·artifact 검사가 실패하면 non-zero로 종료한다. `dry-run`과 `report`는 네트워크, Redis, PostgreSQL, Docker 또는 AWS에 의존하지 않는다.
+JSON 출력은 `ok`, `schema_version`, `command`, `data`, `warnings`, `errors`를 고정한다. `budget-check`가 호출을 차단하거나 입력·artifact 검사가 실패하면 non-zero로 종료한다. `dry-run`과 `report`는 네트워크, Redis, PostgreSQL, Docker 또는 cloud provider API에 의존하지 않는다.
 
 ## 완료 검증
 

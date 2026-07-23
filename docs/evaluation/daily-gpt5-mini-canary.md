@@ -2,11 +2,11 @@
 
 ## 목적
 
-단일 AWS EC2에 배포된 CCIM을 매일 같은 수준의 coding-agent 작업으로 통과시켜 압축, 원문 복구, write guard, provider 호출, telemetry와 배포 상태를 함께 확인한다. 이 작업은 synthetic daily benchmark이며 개인 실제 작업 데이터와 분리한다.
+선택한 cloud의 단일 Linux VM에 배포된 CCIM을 매일 같은 수준의 coding-agent 작업으로 통과시켜 압축, 원문 복구, write guard, provider 호출, telemetry와 배포 상태를 함께 확인한다. 이 작업은 synthetic daily benchmark이며 개인 실제 작업 데이터와 분리한다.
 
 하루 작업은 같은 fixture를 compression off와 on으로 각각 실행하는 A/B 한 쌍이다. 무료 token을 소진하는 것이 목표가 아니라, 매일 비교 가능한 품질·절감·지연 표본을 남기는 것이 목표다.
 
-이 문서는 실제 실행 계약을 정의하지만 곧바로 데이터 수집을 허가하지 않는다. 로드맵 2단계에서는 mock provider로 schema·예산·artifact dry-run만 수행하고, 3단계에서는 동일 runner를 AWS VM에서 외부 호출 없이 검증한다. 4단계의 host/provider 호환성까지 통과한 뒤 5단계에서만 예약 canary와 실제 record 축적을 시작한다.
+이 문서는 실제 실행 계약을 정의하지만 곧바로 데이터 수집을 허가하지 않는다. 로드맵 2단계에서는 mock provider로 schema·예산·artifact dry-run만 수행하고, 3단계에서는 production self-hosted runner가 있는 단일 VM에서 외부 호출 없이 검증한다. 4단계의 host/provider 호환성까지 통과한 뒤 5단계에서만 예약 canary와 실제 record 축적을 시작한다.
 
 ## 무료 일일 사용 조건
 
@@ -95,8 +95,8 @@ pipeline fixture에서 retry 이후 중복 write와 잘못된 transform 선택�
 ## 실행 절차
 
 1. GitHub Actions schedule을 `09:10 KST` 이후로 두거나 `workflow_dispatch`로 실행한다.
-2. workflow가 OIDC로 AWS deploy role을 얻는다.
-3. Systems Manager Run Command가 단일 EC2의 canary runner를 시작한다.
+2. workflow가 `production` environment와 `ccim-production` runner label을 확인한다.
+3. 단일 VM의 self-hosted runner가 loopback canary를 시작한다.
 4. runner가 UTC 일일 ledger, 당일 중복 run, 현재 deployment digest를 확인한다.
 5. immutable fixture를 baseline과 compressed용 임시 workspace 두 곳에 복사한다.
 6. 홀수 날짜는 baseline-first, 짝수 날짜는 compressed-first로 실행 순서를 교대한다.
@@ -104,7 +104,7 @@ pipeline fixture에서 retry 이후 중복 write와 잘못된 transform 선택�
 8. 배포된 gateway의 loopback endpoint로 동일한 task를 실행한다.
 9. pytest와 semantic checker를 실행한다.
 10. request telemetry에 `canary_run_id`, `task_version`, `deployment_sha`, `image_digest`, `model_snapshot`, `compression_mode`를 기록한다.
-11. 원문을 제외한 요약 JSON만 Systems Manager command output과 CI artifact로 보관한다.
+11. 원문을 제외한 요약 JSON만 production job output과 CI artifact로 보관한다.
 12. 두 임시 workspace를 폐기한다.
 
 ## A/B 비교 규칙
@@ -145,6 +145,6 @@ pipeline fixture에서 retry 이후 중복 write와 잘못된 transform 선택�
 - test·semantic 결과와 latency
 - 배포 SHA, image digest, task/fault version
 
-30일 집계에는 active day, 완전한 A/B pair 수, pass rate, 절감·지연 분포, retrieve miss, guard block/false positive, rollback, provider 비용과 AWS 비용을 포함한다. 2,500,000은 일일 한도이므로 30일 총예산으로 표기하지 않고 날짜별 사용량과 30일 누적량을 함께 표시한다.
+30일 집계에는 active day, 완전한 A/B pair 수, pass rate, 절감·지연 분포, retrieve miss, guard block/false positive, rollback, provider 비용과 선택한 cloud의 VM·disk·backup 비용을 포함한다. 2,500,000은 일일 한도이므로 30일 총예산으로 표기하지 않고 날짜별 사용량과 30일 누적량을 함께 표시한다.
 
 daily benchmark 결과는 synthetic으로 표시하고 개인 실제 코딩 작업의 production observation과 별도 표로 공개한다.

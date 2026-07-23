@@ -1,0 +1,242 @@
+name: Single VM Delivery
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [master]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ccim-production-delivery
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish verified digest
+    if: >-
+      ${{
+        vars.CCIM_DELIVERY_ENABLED == 'true' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'master'
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.publish.outputs.image_ref }}
+      image_digest: ${{ steps.publish.outputs.image_digest }}
+      source_revision: ${{ steps.publish.outputs.source_revision }}
+    env:
+      SOURCE_REVISION: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Build immutable delivery candidate
+        run: |
+          docker build \
+            --build-arg VCS_REF="$SOURCE_REVISION" \
+            --tag "ccim:$SOURCE_REVISION" \
+            .
+
+      - name: Validate candidate with migration and readiness
+        env:
+          CCIM_IMAGE_REF: ccim:${{ github.event.workflow_run.head_sha }}
+          CCIM_BUILD_REF: ${{ github.event.workflow_run.head_sha }}
+          CCIM_POSTGRES_PASSWORD: ccim-delivery-smoke-only
+        run: |
+          docker compose config --quiet
+          docker compose up -d --no-build --wait
+          curl --fail --silent http://127.0.0.1:8080/live > /tmp/ccim-live.json
+          curl --fail --silent http://127.0.0.1:8080/ready > /tmp/ccim-ready.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          live = json.loads(Path('/tmp/ccim-live.json').read_text())
+          ready = json.loads(Path('/tmp/ccim-ready.json').read_text())
+          assert live['status'] == 'live'
+          assert ready['status'] == 'ready'
+          assert ready['dependencies']['migrations']['current'] is True
+          PY
+
+      - name: Authenticate to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Publish SHA tag and resolve immutable digest
+        id: publish
+        run: |
+          image_name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker tag "ccim:$SOURCE_REVISION" "$image_name:$SOURCE_REVISION"
+          docker push "$image_name:$SOURCE_REVISION"
+
+          digest=""
+          for attempt in 1 2 3 4 5; do
+            digest="$(
+              docker buildx imagetools inspect "$image_name:$SOURCE_REVISION" |
+                awk '$1 == "Digest:" {print $2; exit}'
+            )"
+            if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              break
+            fi
+            sleep 2
+          done
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          image_ref="$image_name@$digest"
+          printf 'image_ref=%s\n' "$image_ref" >> "$GITHUB_OUTPUT"
+          printf 'image_digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'source_revision=%s\n' "$SOURCE_REVISION" >> "$GITHUB_OUTPUT"
+
+          mkdir -p artifacts
+          python3 - "$SOURCE_REVISION" "$image_ref" "$digest" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          source_revision, image_ref, image_digest = sys.argv[1:]
+          Path('artifacts/delivery-candidate.json').write_text(
+              json.dumps(
+                  {
+                      'schema': 'ccim-delivery-candidate-v1',
+                      'source_revision': source_revision,
+                      'image_ref': image_ref,
+                      'image_digest': image_digest,
+                      'migration': 'current',
+                      'live': 'pass',
+                      'ready': 'pass',
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          PYTHONPATH=src python3 scripts/check_artifact_safety.py \
+            artifacts/delivery-candidate.json
+
+      - name: Upload delivery candidate summary
+        uses: actions/upload-artifact@v6
+        with:
+          name: delivery-candidate
+          path: artifacts/delivery-candidate.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop delivery smoke stack
+        if: always()
+        env:
+          CCIM_IMAGE_REF: ccim:${{ github.event.workflow_run.head_sha }}
+          CCIM_BUILD_REF: ${{ github.event.workflow_run.head_sha }}
+          CCIM_POSTGRES_PASSWORD: ccim-delivery-smoke-only
+        run: docker compose down --volumes --remove-orphans
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io || true
+
+  deploy:
+    name: Deploy digest to production VM
+    needs: publish
+    if: needs.publish.result == 'success' && needs.publish.outputs.image_ref != ''
+    environment:
+      name: production
+    runs-on: [self-hosted, linux, x64, ccim-production]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.publish.outputs.source_revision }}
+          persist-credentials: false
+
+      - name: Validate production runner contract
+        env:
+          CCIM_IMAGE_REF: ${{ needs.publish.outputs.image_ref }}
+          CCIM_SOURCE_REVISION: ${{ needs.publish.outputs.source_revision }}
+        run: |
+          python3 -c "import sys; assert sys.version_info >= (3, 12)"
+          docker compose version
+          bash -n deploy/single-vm/deploy.sh
+          bash -n deploy/single-vm/canary-dry-run.sh
+          bash deploy/single-vm/deploy.sh --validate-only
+
+      - name: Authenticate VM to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Deploy with migration, readiness, and rollback
+        id: deploy
+        continue-on-error: true
+        env:
+          CCIM_IMAGE_REF: ${{ needs.publish.outputs.image_ref }}
+          CCIM_SOURCE_REVISION: ${{ needs.publish.outputs.source_revision }}
+          CCIM_RUNTIME_ENV_FILE: /etc/ccim/ccim.env
+          CCIM_DEPLOY_STATE_DIR: /var/lib/ccim-deploy
+          CCIM_COMPOSE_PROJECT_NAME: ccim
+          CCIM_DEPLOY_SUMMARY_PATH: artifacts/deployment-summary.json
+        run: bash deploy/single-vm/deploy.sh
+
+      - name: Run VM-local mock canary
+        id: canary
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        env:
+          CCIM_IMAGE_REF: ${{ needs.publish.outputs.image_ref }}
+          CCIM_SOURCE_REVISION: ${{ needs.publish.outputs.source_revision }}
+          CCIM_RUNTIME_ENV_FILE: /etc/ccim/ccim.env
+          CCIM_COMPOSE_PROJECT_NAME: ccim
+          CCIM_CANARY_SUMMARY_PATH: artifacts/vm-canary-summary.json
+        run: bash deploy/single-vm/canary-dry-run.sh
+
+      - name: Check deployment artifact safety
+        id: artifact-safety
+        if: always()
+        continue-on-error: true
+        run: |
+          summaries=()
+          [[ -f artifacts/deployment-summary.json ]] &&
+            summaries+=(artifacts/deployment-summary.json)
+          [[ -f artifacts/vm-canary-summary.json ]] &&
+            summaries+=(artifacts/vm-canary-summary.json)
+          [[ "${#summaries[@]}" -gt 0 ]]
+          PYTHONPATH=src python3 scripts/check_artifact_safety.py "${summaries[@]}"
+
+      - name: Upload deployment summaries
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: single-vm-deployment
+          path: |
+            artifacts/deployment-summary.json
+            artifacts/vm-canary-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io || true
+
+      - name: Enforce deployment and canary results
+        if: always()
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          CANARY_OUTCOME: ${{ steps.canary.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.artifact-safety.outcome }}
+        run: |
+          [[ "$DEPLOY_OUTCOME" == "success" ]]
+          [[ "$CANARY_OUTCOME" == "success" ]]
+          [[ "$ARTIFACT_OUTCOME" == "success" ]]

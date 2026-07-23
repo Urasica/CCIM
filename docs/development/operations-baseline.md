@@ -38,7 +38,7 @@ curl.exe --fail http://127.0.0.1:8080/ready
 | `integration` | Redis/PostgreSQL, 신규·기존 DB migration, mock integration, semantic fixture | live provider 없이 재현 실패 |
 | `image` | SHA image build, Compose, migration, `/live`, `/ready` smoke | 앞 job 실패 또는 readiness 실패 |
 
-image job은 앞의 세 job이 성공한 뒤에만 실행한다. 이 workflow는 image를 local runner에 만들지만 registry push나 AWS 배포 권한을 사용하지 않는다. ECR과 Systems Manager 배포는 별도 CD 단계에서만 연결한다.
+image job은 앞의 세 job이 성공한 뒤에만 실행한다. 이 workflow는 image를 local runner에 만들지만 registry write나 production runner 권한을 사용하지 않는다. 성공한 `master` push 뒤의 GHCR 게시와 단일 VM 배포는 별도 `delivery.yml`에서만 연결한다.
 
 ## Artifact 정책
 
@@ -55,6 +55,6 @@ image job은 앞의 세 job이 성공한 뒤에만 실행한다. 이 workflow는
 
 ## Network와 secret 경계
 
-Compose는 gateway를 `127.0.0.1:8080`에만 bind한다. Redis와 PostgreSQL에는 host port를 만들지 않고 internal network에 둔다. 운영 VM에서는 Systems Manager port forwarding 또는 허용된 private 경로를 사용하며 public database와 배포용 SSH를 열지 않는다.
+Compose는 gateway를 `127.0.0.1:8080`에만 bind한다. Redis와 PostgreSQL에는 host port를 만들지 않고 internal network에 둔다. 운영 VM에서는 provider console, 승인된 private tunnel 또는 private network를 사용하며 public database와 지속적인 배포용 SSH를 열지 않는다.
 
 실제 provider key는 `.env`나 VM runtime secret으로만 주입한다. `.dockerignore`는 `.env`, Git metadata, local DB, log, benchmark output과 개발 artifact를 image build context에서 제외한다.

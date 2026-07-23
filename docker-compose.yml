@@ -30,11 +30,11 @@ services:
       - backend
 
   migrate:
-    image: ccim:${CCIM_IMAGE_TAG:-local}
+    image: ${CCIM_IMAGE_REF:-ccim:local}
     build:
       context: .
       args:
-        VCS_REF: ${CCIM_IMAGE_TAG:-local}
+        VCS_REF: ${CCIM_BUILD_REF:-local}
     command: ["python", "-m", "ccim.migrations", "apply"]
     environment:
       CCIM_DATABASE_URL: postgresql+psycopg://ccim:${CCIM_POSTGRES_PASSWORD:-ccim-local-only}@postgres:5432/ccim
@@ -46,14 +46,14 @@ services:
       - backend
 
   gateway:
-    image: ccim:${CCIM_IMAGE_TAG:-local}
+    image: ${CCIM_IMAGE_REF:-ccim:local}
     build:
       context: .
       args:
-        VCS_REF: ${CCIM_IMAGE_TAG:-local}
+        VCS_REF: ${CCIM_BUILD_REF:-local}
     restart: unless-stopped
     env_file:
-      - path: .env
+      - path: ${CCIM_RUNTIME_ENV_FILE:-.env}
         required: false
     environment:
       CCIM_HOST: 0.0.0.0
