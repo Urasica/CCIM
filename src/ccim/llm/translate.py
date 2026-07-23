@@ -25,6 +25,15 @@ from ccim.api.schemas import (
 ANTHROPIC_VERSION = "2023-06-01"
 
 
+class ProviderCompatibilityError(ValueError):
+    """Raised when an upstream response cannot be safely canonicalized."""
+
+    def __init__(self, *, reason: str, path: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.path = path
+
+
 # ----- Request: Anthropic -> OpenAI -----------------------------------
 
 
@@ -60,6 +69,13 @@ def anthropic_to_openai_request(req: MessagesRequest, *, stream: bool) -> dict[s
             }
             for t in req.tools
         ]
+    for field in ("temperature", "top_p", "metadata"):
+        value = getattr(req, field, None)
+        if value is not None:
+            body[field] = value
+    stop_sequences = getattr(req, "stop_sequences", None)
+    if stop_sequences:
+        body["stop"] = stop_sequences
     return body
 
 
@@ -158,46 +174,176 @@ _FINISH_TO_STOP: dict[str, str] = {
 
 def openai_to_anthropic_response(resp: dict[str, Any], *, model: str) -> dict[str, Any]:
     """Convert OpenAI Chat Completions response -> Anthropic Messages response."""
-    choices = resp.get("choices") or [{}]
+    if not isinstance(resp, dict):
+        raise ProviderCompatibilityError(
+            reason="response_not_object",
+            path="$",
+            message="OpenAI-compatible response must be an object.",
+        )
+    choices = resp.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ProviderCompatibilityError(
+            reason="missing_response_choice",
+            path="choices",
+            message="OpenAI-compatible response must contain at least one choice.",
+        )
     choice = choices[0]
-    message = choice.get("message") or {}
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        raise ProviderCompatibilityError(
+            reason="invalid_response_message",
+            path="choices[0].message",
+            message="OpenAI-compatible choice message must be an object.",
+        )
+    unsupported_message_fields = sorted(
+        set(message) - {"role", "content", "tool_calls"}
+    )
+    if unsupported_message_fields:
+        field = unsupported_message_fields[0]
+        raise ProviderCompatibilityError(
+            reason="unsupported_response_message_field",
+            path=f"choices[0].message.{field}",
+            message=f"Response message field {field!r} is not supported.",
+        )
 
     content_blocks: list[dict[str, Any]] = []
     text = message.get("content")
     if isinstance(text, str) and text:
         content_blocks.append({"type": "text", "text": text})
-    for tc in message.get("tool_calls") or []:
-        if tc.get("type") not in (None, "function"):
-            continue
-        fn = tc.get("function") or {}
+    elif text is not None and not isinstance(text, str):
+        raise ProviderCompatibilityError(
+            reason="unsupported_response_content",
+            path="choices[0].message.content",
+            message="OpenAI-compatible response content must be a string or null.",
+        )
+
+    raw_tool_calls = message.get("tool_calls") or []
+    if not isinstance(raw_tool_calls, list):
+        raise ProviderCompatibilityError(
+            reason="invalid_response_tool_calls",
+            path="choices[0].message.tool_calls",
+            message="OpenAI-compatible response tool_calls must be an array.",
+        )
+    for index, tc in enumerate(raw_tool_calls):
+        path = f"choices[0].message.tool_calls[{index}]"
+        if not isinstance(tc, dict) or tc.get("type") not in (None, "function"):
+            raise ProviderCompatibilityError(
+                reason="unsupported_response_tool_type",
+                path=path,
+                message="Only function tool calls are supported.",
+            )
+        unsupported_tool_fields = sorted(set(tc) - {"id", "type", "function"})
+        if unsupported_tool_fields:
+            field = unsupported_tool_fields[0]
+            raise ProviderCompatibilityError(
+                reason="unsupported_response_tool_field",
+                path=f"{path}.{field}",
+                message=f"Response tool call field {field!r} is not supported.",
+            )
+        fn = tc.get("function")
+        if not isinstance(fn, dict):
+            raise ProviderCompatibilityError(
+                reason="invalid_response_tool_function",
+                path=f"{path}.function",
+                message="Tool call function must be an object.",
+            )
+        unsupported_function_fields = sorted(set(fn) - {"name", "arguments"})
+        if unsupported_function_fields:
+            field = unsupported_function_fields[0]
+            raise ProviderCompatibilityError(
+                reason="unsupported_response_tool_function_field",
+                path=f"{path}.function.{field}",
+                message=f"Tool function field {field!r} is not supported.",
+            )
+        call_id = tc.get("id")
+        name = fn.get("name")
+        if not isinstance(call_id, str) or not call_id:
+            raise ProviderCompatibilityError(
+                reason="invalid_response_tool_id",
+                path=f"{path}.id",
+                message="Tool call id must be a non-empty string.",
+            )
+        if not isinstance(name, str) or not name:
+            raise ProviderCompatibilityError(
+                reason="invalid_response_tool_name",
+                path=f"{path}.function.name",
+                message="Tool call name must be a non-empty string.",
+            )
+        raw_arguments = fn.get("arguments", "")
+        if not isinstance(raw_arguments, str):
+            raise ProviderCompatibilityError(
+                reason="invalid_response_tool_arguments",
+                path=f"{path}.function.arguments",
+                message="Tool call arguments must be an encoded JSON object.",
+            )
         try:
-            args = json.loads(fn.get("arguments", "") or "{}")
-        except json.JSONDecodeError:
-            args = {"_raw_arguments": fn.get("arguments", "")}
+            args = json.loads(raw_arguments or "{}")
+        except json.JSONDecodeError as exc:
+            raise ProviderCompatibilityError(
+                reason="invalid_response_tool_arguments_json",
+                path=f"{path}.function.arguments",
+                message="Tool call arguments must contain valid JSON.",
+            ) from exc
+        if not isinstance(args, dict):
+            raise ProviderCompatibilityError(
+                reason="invalid_response_tool_arguments",
+                path=f"{path}.function.arguments",
+                message="Decoded tool call arguments must be an object.",
+            )
         content_blocks.append(
             {
                 "type": "tool_use",
-                "id": tc.get("id", ""),
-                "name": fn.get("name", ""),
+                "id": call_id,
+                "name": name,
                 "input": args,
             }
         )
 
     finish = choice.get("finish_reason")
-    stop_reason = _FINISH_TO_STOP.get(finish or "stop", "end_turn")
+    normalized_finish = finish or "stop"
+    stop_reason = _FINISH_TO_STOP.get(normalized_finish)
+    if stop_reason is None:
+        raise ProviderCompatibilityError(
+            reason="unsupported_finish_reason",
+            path="choices[0].finish_reason",
+            message=f"Finish reason {normalized_finish!r} is not supported.",
+        )
 
     usage = resp.get("usage") or {}
+    if not isinstance(usage, dict):
+        raise ProviderCompatibilityError(
+            reason="invalid_provider_usage",
+            path="usage",
+            message="Provider usage must be an object when present.",
+        )
+    try:
+        input_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        output_tokens = int(usage.get("completion_tokens", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise ProviderCompatibilityError(
+            reason="invalid_provider_usage",
+            path="usage",
+            message="Provider usage token counts must be integers.",
+        ) from exc
+    raw_created = resp.get("created", 0)
+    if not isinstance(raw_created, int) or isinstance(raw_created, bool):
+        raise ProviderCompatibilityError(
+            reason="invalid_response_created",
+            path="created",
+            message="Response created must be an integer when present.",
+        )
     return {
         "id": resp.get("id", ""),
         "type": "message",
         "role": "assistant",
         "model": model,
+        "created": raw_created,
         "content": content_blocks,
         "stop_reason": stop_reason,
         "stop_sequence": None,
         "usage": {
-            "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
-            "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
         },
     }
 
@@ -248,8 +394,12 @@ async def openai_sse_to_anthropic(
                     return
                 try:
                     chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
+                except json.JSONDecodeError as exc:
+                    raise ProviderCompatibilityError(
+                        reason="invalid_stream_json",
+                        path="stream.data",
+                        message="OpenAI-compatible stream data must contain valid JSON.",
+                    ) from exc
 
                 if not msg_id:
                     msg_id = chunk.get("id", "")
@@ -274,10 +424,28 @@ async def openai_sse_to_anthropic(
                     )
 
                 choices = chunk.get("choices") or []
+                if not isinstance(choices, list):
+                    raise ProviderCompatibilityError(
+                        reason="invalid_stream_choices",
+                        path="choices",
+                        message="Stream choices must be an array.",
+                    )
                 if not choices:
                     continue
                 ch0 = choices[0]
+                if not isinstance(ch0, dict):
+                    raise ProviderCompatibilityError(
+                        reason="invalid_stream_choice",
+                        path="choices[0]",
+                        message="Stream choice and delta must be objects.",
+                    )
                 delta = ch0.get("delta") or {}
+                if not isinstance(delta, dict):
+                    raise ProviderCompatibilityError(
+                        reason="invalid_stream_choice",
+                        path="choices[0].delta",
+                        message="Stream choice and delta must be objects.",
+                    )
 
                 # Text delta
                 content = delta.get("content")
@@ -301,9 +469,28 @@ async def openai_sse_to_anthropic(
                             "delta": {"type": "text_delta", "text": content},
                         },
                     )
+                elif content is not None and not isinstance(content, str):
+                    raise ProviderCompatibilityError(
+                        reason="unsupported_stream_content",
+                        path="choices[0].delta.content",
+                        message="Stream content must be a string or null.",
+                    )
 
                 # Tool calls (buffered for V1)
-                for tc_delta in delta.get("tool_calls") or []:
+                raw_tool_deltas = delta.get("tool_calls") or []
+                if not isinstance(raw_tool_deltas, list):
+                    raise ProviderCompatibilityError(
+                        reason="invalid_stream_tool_calls",
+                        path="choices[0].delta.tool_calls",
+                        message="Stream tool_calls must be an array.",
+                    )
+                for tc_delta in raw_tool_deltas:
+                    if not isinstance(tc_delta, dict):
+                        raise ProviderCompatibilityError(
+                            reason="invalid_stream_tool_call",
+                            path="choices[0].delta.tool_calls",
+                            message="Stream tool call delta must be an object.",
+                        )
                     idx = tc_delta.get("index", 0)
                     cur = pending_tool_calls.setdefault(
                         idx, {"id": "", "name": "", "arguments": ""}
@@ -340,6 +527,13 @@ async def _close_anthropic_stream(
 ) -> AsyncIterator[bytes]:
     if not started:
         return
+    stop_reason = _FINISH_TO_STOP.get(finish_reason)
+    if stop_reason is None:
+        raise ProviderCompatibilityError(
+            reason="unsupported_finish_reason",
+            path="choices[0].finish_reason",
+            message=f"Finish reason {finish_reason!r} is not supported.",
+        )
     if text_block_open:
         yield encode_sse_event(
             "content_block_stop", {"type": "content_block_stop", "index": 0}
@@ -347,11 +541,27 @@ async def _close_anthropic_stream(
 
     # Emit each buffered tool call as a single block (text-only streaming limitation).
     next_index = 1 if text_block_open else 0
-    for _, tc in sorted(pending_tool_calls.items()):
+    for tool_index, tc in sorted(pending_tool_calls.items()):
+        if not tc["id"] or not tc["name"]:
+            raise ProviderCompatibilityError(
+                reason="invalid_stream_tool_call",
+                path=f"choices[0].delta.tool_calls[{tool_index}]",
+                message="Streamed tool calls require a non-empty id and name.",
+            )
         try:
             input_obj = json.loads(tc["arguments"]) if tc["arguments"] else {}
-        except json.JSONDecodeError:
-            input_obj = {"_raw_arguments": tc["arguments"]}
+        except json.JSONDecodeError as exc:
+            raise ProviderCompatibilityError(
+                reason="invalid_stream_tool_arguments_json",
+                path=f"choices[0].delta.tool_calls[{tool_index}].function.arguments",
+                message="Streamed tool call arguments must contain valid JSON.",
+            ) from exc
+        if not isinstance(input_obj, dict):
+            raise ProviderCompatibilityError(
+                reason="invalid_stream_tool_arguments",
+                path=f"choices[0].delta.tool_calls[{tool_index}].function.arguments",
+                message="Decoded streamed tool call arguments must be an object.",
+            )
         yield encode_sse_event(
             "content_block_start",
             {
@@ -387,7 +597,7 @@ async def _close_anthropic_stream(
         {
             "type": "message_delta",
             "delta": {
-                "stop_reason": _FINISH_TO_STOP.get(finish_reason, "end_turn"),
+                "stop_reason": stop_reason,
                 "stop_sequence": None,
             },
             "usage": {"output_tokens": output_tokens},

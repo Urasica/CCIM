@@ -106,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── 의존성 인스턴스 구성 ─────────────────────────────────────────
     from ccim.compress.ast_compressor import ASTCompressor
     from ccim.middleware.chain import (
+        CompatibilityValidationMiddleware,
         CompressMiddleware,
         CurrentTurnWriteGuardMiddleware,
         ForwardAndInterceptMiddleware,
@@ -185,6 +186,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             compress_enabled=compression_runtime_enabled,
         ),
         ForwardAndInterceptMiddleware(llm_client=llm_client, interceptor=interceptor, model_override=settings.llm_model),
+        CompatibilityValidationMiddleware(),
         CurrentTurnWriteGuardMiddleware(settings=settings),
         OrphanMarkerScanMiddleware(store=store),
         WriteRemapMiddleware(mapper=mapper),

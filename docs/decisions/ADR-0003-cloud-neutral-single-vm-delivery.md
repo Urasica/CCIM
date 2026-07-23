@@ -8,7 +8,7 @@
 
 CCIM은 한 대의 VM에서 실제 배포·rollback·backup·운영 관측 경험을 쌓되, 특정 클라우드의 registry, IAM federation 또는 원격 명령 서비스에 종속되지 않아야 한다. AWS ECR·OIDC·Systems Manager 조합은 안전한 선택이지만 GCP, Oracle Cloud 또는 일반 Linux VM으로 이전할 때 delivery control plane을 다시 구현해야 한다.
 
-포트폴리오 단계에서는 다중 node 가용성보다 commit, image digest, migration, readiness, rollback과 복구 증거를 동일한 절차로 반복하는 것이 더 중요하다.
+현재 운영 검증 단계에서는 다중 node 가용성보다 commit, image digest, migration, readiness, rollback과 복구 증거를 동일한 절차로 반복하는 것이 더 중요하다.
 
 ## 결정
 

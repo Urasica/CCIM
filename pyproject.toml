@@ -54,7 +54,7 @@ dev = [
 ]
 
 [project.scripts]
-ccim = "ccim.main:run"
+ccim = "ccim.cli:main"
 
 [build-system]
 requires = ["hatchling"]

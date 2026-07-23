@@ -217,6 +217,7 @@ class CompressMiddleware:
             total = estimate_request_tokens(ctx.request)
             ctx.tokens_input_original = ctx.tokens_input_compressed = total
             ctx.extras["feature_flags"] = {
+                **ctx.extras.get("feature_flags", {}),
                 "compress_enabled": False,
                 "compress_skip_reason": "disabled",
             }
@@ -1202,7 +1203,30 @@ class ForwardAndInterceptMiddleware:
 
         for loop_idx in range(self._max_loops):
             flags["retrieve_loop_iterations"] = loop_idx + 1
-            response_dict = await self._client.complete(working_request)
+            try:
+                response_dict = await self._client.complete(working_request)
+            except Exception as exc:
+                from ccim.llm.translate import ProviderCompatibilityError
+
+                if not isinstance(exc, ProviderCompatibilityError):
+                    raise
+                flags["provider_compatibility_supported"] = False
+                flags["provider_compatibility_reason"] = exc.reason
+                flags["provider_compatibility_path"] = exc.path
+                ctx.response_json = {
+                    "error": {
+                        "type": "unsupported_provider_schema",
+                        "message": str(exc),
+                        "reason": exc.reason,
+                        "path": exc.path,
+                    }
+                }
+                ctx.blocked = True
+                ctx.block_status_code = 502
+                ctx.block_reason = exc.reason
+                ctx.timings_ms["forward"] = int((time.perf_counter() - t0) * 1000)
+                await call_next(ctx)
+                return
             flags["upstream_request_calls"] += 1
 
             request_bytes = getattr(response_dict, "request_bytes", None)
@@ -1405,6 +1429,135 @@ class ForwardAndInterceptMiddleware:
         flags["evidence_redis_warm_loads"] += redis_warm_loads
 
 
+class CompatibilityValidationMiddleware:
+    """Validate canonical provider content and known write-tool schemas."""
+
+    name = "compatibility_validation"
+
+    async def __call__(self, ctx: RequestContext, call_next: NextCallable) -> None:
+        if ctx.response_json is None or "error" in ctx.response_json:
+            await call_next(ctx)
+            return
+        content = ctx.response_json.get("content")
+        if not isinstance(content, list):
+            await self._reject_provider_content(
+                ctx,
+                call_next,
+                reason="invalid_canonical_content",
+                path="content",
+            )
+            return
+
+        from ccim.compatibility.write_tools import inspect_write_tool
+
+        supported_write_tools: list[str] = []
+        for index, block in enumerate(content):
+            path = f"content[{index}]"
+            if not isinstance(block, dict):
+                await self._reject_provider_content(
+                    ctx,
+                    call_next,
+                    reason="invalid_canonical_content_block",
+                    path=path,
+                )
+                return
+            block_type = block.get("type")
+            if block_type == "text":
+                if not isinstance(block.get("text"), str):
+                    await self._reject_provider_content(
+                        ctx,
+                        call_next,
+                        reason="invalid_canonical_text",
+                        path=f"{path}.text",
+                    )
+                    return
+                continue
+            if block_type != "tool_use":
+                await self._reject_provider_content(
+                    ctx,
+                    call_next,
+                    reason="unsupported_canonical_content_block",
+                    path=path,
+                )
+                return
+            if (
+                not isinstance(block.get("id"), str)
+                or not block.get("id")
+                or not isinstance(block.get("name"), str)
+                or not block.get("name")
+                or not isinstance(block.get("input"), dict)
+            ):
+                await self._reject_provider_content(
+                    ctx,
+                    call_next,
+                    reason="invalid_canonical_tool_use",
+                    path=path,
+                )
+                return
+
+            inspection = inspect_write_tool(block["name"], block["input"])
+            if inspection is None:
+                continue
+            flags = ctx.extras.setdefault("feature_flags", {})
+            flags["write_compatibility_tool"] = block["name"]
+            flags["write_compatibility_canonical_tool"] = inspection.canonical_name
+            flags["write_compatibility_status"] = inspection.status
+            flags["write_compatibility_reason"] = inspection.reason
+            if inspection.status == "unsupported":
+                ctx.blocked = False
+                ctx.block_status_code = 200
+                ctx.block_reason = "unsupported_write_schema"
+                ctx.response_json = {
+                    **ctx.response_json,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"[CCIM] Blocked {block['name']} because its write "
+                                f"schema is unsupported. Reason: {inspection.reason}."
+                            ),
+                        }
+                    ],
+                    "stop_reason": "end_turn",
+                }
+                await call_next(ctx)
+                return
+            supported_write_tools.append(block["name"])
+
+        flags = ctx.extras.setdefault("feature_flags", {})
+        flags["provider_compatibility_supported"] = True
+        if supported_write_tools:
+            flags["write_compatibility_supported_tools"] = sorted(
+                set(supported_write_tools)
+            )
+        await call_next(ctx)
+
+    @staticmethod
+    async def _reject_provider_content(
+        ctx: RequestContext,
+        call_next: NextCallable,
+        *,
+        reason: str,
+        path: str,
+    ) -> None:
+        flags = ctx.extras.setdefault("feature_flags", {})
+        flags["provider_compatibility_supported"] = False
+        flags["provider_compatibility_reason"] = reason
+        flags["provider_compatibility_path"] = path
+        ctx.response_json = {
+            "error": {
+                "type": "unsupported_provider_schema",
+                "message": "Upstream response cannot be safely canonicalized.",
+                "reason": reason,
+                "path": path,
+            }
+        }
+        ctx.blocked = True
+        ctx.block_status_code = 502
+        ctx.block_reason = reason
+        await call_next(ctx)
+
+
 class CurrentTurnWriteGuardMiddleware:
     """Replace unsafe write tool_use with a model-visible recovery message.
 
@@ -1428,7 +1581,12 @@ class CurrentTurnWriteGuardMiddleware:
             await call_next(ctx)
             return
 
-        write_tools = _csv_names(self._settings.compression_write_guard_tools)
+        from ccim.compatibility.write_tools import write_tool_names
+
+        write_tools = (
+            _csv_names(self._settings.compression_write_guard_tools)
+            | write_tool_names()
+        )
         content = ctx.response_json.get("content") or []
         write_blocks: list[tuple[str, dict[str, Any]]] = []
         for block in content:
@@ -1504,17 +1662,38 @@ class CurrentTurnWriteGuardMiddleware:
         blocked_tool: str,
         tool_input: dict[str, Any],
     ) -> tuple[bool, str]:
-        target_path = _tool_input_path(tool_input)
+        from ccim.compatibility.write_tools import inspect_write_tool
+
+        inspection = inspect_write_tool(blocked_tool, tool_input)
+        if inspection is None:
+            target_path = _tool_input_path(tool_input)
+            flags = ctx.extras.setdefault("feature_flags", {})
+            flags["current_turn_write_guard_target_path"] = target_path
+            return False, "unsupported_write_tool"
+        target_path = inspection.target_path
         flags = ctx.extras.setdefault("feature_flags", {})
         flags["current_turn_write_guard_target_path"] = target_path
+        flags["write_compatibility_status"] = inspection.status
+        flags["write_compatibility_reason"] = inspection.reason
+        flags["write_compatibility_canonical_tool"] = inspection.canonical_name
+        if inspection.status == "unsupported":
+            return False, inspection.reason
         if self._is_unrelated_write_target(ctx, target_path):
             return True, "allowed_unrelated_write"
 
-        tool = blocked_tool.lower()
+        tool = inspection.canonical_name
         if tool == "edit":
-            return self._allow_edit_after_retrieve(ctx, tool_input, target_path)
+            return self._allow_old_strings_after_retrieve(
+                ctx,
+                list(inspection.old_strings),
+                target_path,
+            )
         if tool == "multiedit":
-            return self._allow_multiedit_after_retrieve(ctx, tool_input, target_path)
+            return self._allow_old_strings_after_retrieve(
+                ctx,
+                list(inspection.old_strings),
+                target_path,
+            )
         if tool == "write":
             return self._allow_source_write_after_retrieve(ctx, target_path)
         return False, "unsupported_write_tool"
@@ -1815,6 +1994,10 @@ class TelemetryMiddleware:
 
     async def __call__(self, ctx: RequestContext, call_next: NextCallable) -> None:
         await call_next(ctx)
+        self.record(ctx)
+
+    def record(self, ctx: RequestContext) -> None:
+        """Schedule one telemetry record without changing request state."""
         if not self._enabled:
             self._skipped += 1
             return

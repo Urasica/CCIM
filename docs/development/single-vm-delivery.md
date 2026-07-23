@@ -99,7 +99,7 @@ sudo usermod -aG docker <RUNNER_USER>
 
 Docker group은 사실상 root에 가까운 권한이다. production runner 계정에 shell login이나 다른 repository runner를 함께 할당하지 않는다.
 
-public repository의 self-hosted runner는 fork가 위험한 workflow를 만들 가능성이 있으므로 GitHub도 private repository 사용을 우선 권장한다. public portfolio repository에서 운영할 경우 다음 보호가 모두 필요하다.
+public repository의 self-hosted runner는 fork가 위험한 workflow를 만들 가능성이 있으므로 GitHub도 private repository 사용을 우선 권장한다. 공개 상태를 유지한 채 운영할 경우 다음 보호가 모두 필요하다.
 
 - `production` environment의 deployment branch를 `master`로 제한
 - `master` branch protection과 CI required check

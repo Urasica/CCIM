@@ -22,6 +22,7 @@ from ccim.api.schemas import (
 )
 from ccim.llm.client import AnthropicClient, OpenAIClient, build_client
 from ccim.llm.translate import (
+    ProviderCompatibilityError,
     anthropic_to_openai_request,
     encode_sse_event,
     openai_sse_to_anthropic,
@@ -191,7 +192,7 @@ def test_translate_response_finish_length_to_max_tokens() -> None:
     assert anth["stop_reason"] == "max_tokens"
 
 
-def test_translate_response_invalid_tool_args_kept_as_raw() -> None:
+def test_translate_response_invalid_tool_args_are_explicitly_unsupported() -> None:
     openai_resp = {
         "choices": [
             {
@@ -208,8 +209,26 @@ def test_translate_response_invalid_tool_args_kept_as_raw() -> None:
             }
         ]
     }
-    anth = openai_to_anthropic_response(openai_resp, model="m")
-    assert anth["content"][0]["input"] == {"_raw_arguments": "not-json"}
+    with pytest.raises(ProviderCompatibilityError) as exc_info:
+        openai_to_anthropic_response(openai_resp, model="m")
+    assert exc_info.value.reason == "invalid_response_tool_arguments_json"
+
+
+def test_translate_response_unknown_content_is_explicitly_unsupported() -> None:
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "audio", "audio": "data"}],
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    with pytest.raises(ProviderCompatibilityError) as exc_info:
+        openai_to_anthropic_response(response, model="m")
+    assert exc_info.value.reason == "unsupported_response_content"
 
 
 # ----- SSE translation -------------------------------------------------
@@ -270,6 +289,26 @@ async def test_openai_sse_to_anthropic_tool_call_buffered() -> None:
     assert '"name": "search"' in text
     assert '\\"q\\": \\"foo\\"' in text or "q" in text
     assert "tool_use" in text  # stop_reason mapped
+
+
+async def test_openai_sse_invalid_tool_json_is_explicitly_unsupported() -> None:
+    chunks = [
+        b'data: {"id": "c3", "choices": [{"delta": {"tool_calls": '
+        b'[{"index": 0, "id": "t1", "function": '
+        b'{"name": "Edit", "arguments": "not-json"}}]}}]}\n\n',
+        b'data: {"id": "c3", "choices": [{"delta": {}, '
+        b'"finish_reason": "tool_calls"}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+    async def src():
+        for chunk in chunks:
+            yield chunk
+
+    with pytest.raises(ProviderCompatibilityError) as exc_info:
+        async for _ in openai_sse_to_anthropic(src(), model="gpt-4.1"):
+            pass
+    assert exc_info.value.reason == "invalid_stream_tool_arguments_json"
 
 
 # ----- HTTP clients (respx) -------------------------------------------

@@ -10,21 +10,25 @@ CCIM은 이런 반복 컨텍스트를 압축하고, 원본은 Redis에 보관하
 
 ## 지원 범위
 
-CCIM는 LLM API gateway로 개발합니다. Anthropic Messages 호환 요청을 받아 압축, 복원, write guard, telemetry를 적용한 뒤 upstream LLM으로 전달하는 구조입니다.
+CCIM는 LLM API gateway로 개발합니다. Anthropic Messages와 OpenAI Chat Completions 요청을 canonical request로 정규화하고 압축, 복원, write guard, telemetry를 적용한 뒤 upstream LLM으로 전달합니다.
 
 지원하는 범위:
 
-- Anthropic Messages 호환 `/v1/messages`, `/v1/models`
+- Anthropic Messages 호환 `/v1/messages`
+- OpenAI Chat Completions 호환 `/v1/chat/completions`
+- 공통 model discovery `/v1/models`
 - Anthropic, OpenAI, OpenAI-compatible upstream
 - Redis 기반 원문 저장과 `retrieve_original` 복원
 - PostgreSQL과 Admin UI 기반 요청별 telemetry
-- 현재 턴 `Read` 결과 압축과 write guard
+- 현재 턴 `Read` 결과 압축과 fixture 기반 write schema guard
 
 지원하지 않는 범위:
 
 - Codex/Claude 구독제용 MCP 도구
 - MCP tool/resource/prompt 기반 압축 workflow
 - host가 파일을 읽은 뒤 사후 압축하는 방식
+- OpenAI Responses API와 multimodal ingress
+- fixture로 검증되지 않은 patch/write schema
 
 이 방향의 결정 이유와 개발 계획은 [개발 문서](docs/README.md)에 정리되어 있습니다.
 
@@ -40,7 +44,7 @@ CCIM는 LLM API gateway로 개발합니다. Anthropic Messages 호환 요청을 
 - Redis, PostgreSQL과 evidence volume은 같은 VM의 private network에 두고 공용 포트로 노출하지 않습니다.
 - PostgreSQL·Redis·evidence backup은 `age`로 암호화하고 외부 보관 위치는 선택한 cloud에 맞게 정합니다.
 
-운영 배포 결정은 [ADR-0003](docs/decisions/ADR-0003-cloud-neutral-single-vm-delivery.md), 실제 VM 준비 절차는 [클라우드 중립 단일 VM delivery](docs/development/single-vm-delivery.md), GPT-5 mini 일일 검증 작업과 하루 250만 무료 공유 token 한도는 [일일 운영 검증 계획](docs/evaluation/daily-gpt5-mini-canary.md)에 기록합니다.
+운영 배포 결정은 [ADR-0003](docs/decisions/ADR-0003-cloud-neutral-single-vm-delivery.md), 실제 VM 준비 절차는 [클라우드 중립 단일 VM delivery](docs/development/single-vm-delivery.md), ingress와 host 지원 범위는 [호환성 행렬](docs/development/compatibility-matrix.md), GPT-5 mini 일일 검증 작업과 하루 250만 무료 공유 token 한도는 [일일 운영 검증 계획](docs/evaluation/daily-gpt5-mini-canary.md)에 기록합니다.
 
 ## 왜 필요한가
 
@@ -248,6 +252,28 @@ http://127.0.0.1:8090
 
 Admin UI에서 `CCIM 시작`을 누르면 `uv run ccim` 하위 프로세스가 실행됩니다. 설정을 저장하면 실행 중인 CCIM은 자동 재시작을 시도합니다.
 
+### 배포 준비 검사와 Claude Code launcher
+
+Redis, PostgreSQL, migration, provider, port와 compression readiness를 변경 없이 검사합니다.
+
+```powershell
+uv run ccim doctor
+uv run ccim doctor --json
+```
+
+`doctor`는 migration을 적용하거나 model completion을 호출하지 않습니다. 외부 의존성 검사를 생략한
+`--offline` 결과는 누락 상태를 `skipped`로 남기며 성공으로 처리하지 않습니다.
+
+Claude Code를 CCIM endpoint로 한 process 범위에서 실행하기 전에 적용될 환경만 확인할 수 있습니다.
+
+```powershell
+uv run ccim run --dry-run --json --session local-check -- claude -p "health check"
+uv run ccim run --session local-check -- claude
+```
+
+launcher는 parent environment나 Claude Code 설정 파일을 수정하지 않습니다. 지원 schema와 차단
+reason은 [호환성 행렬](docs/development/compatibility-matrix.md)을 따릅니다.
+
 ## 핵심 설정
 
 | 키 | 설명 |
@@ -339,8 +365,10 @@ uv run python tests/compare/direct_test.py --session direct-check
 | 파일 | 역할 |
 |---|---|
 | `src/ccim/main.py` | FastAPI 앱, lifespan 초기화, middleware 체인 조립 |
-| `src/ccim/api/routes.py` | `/v1/messages`, `/v1/models`, session id 처리 |
-| `src/ccim/middleware/chain.py` | PCFI, 압축, retrieve, write guard, telemetry 체인 |
+| `src/ccim/api/routes.py` | `/v1/messages`, `/v1/chat/completions`, `/v1/models`, session 처리 |
+| `src/ccim/compatibility/` | OpenAI ingress/egress와 write-tool schema registry |
+| `src/ccim/cli.py`, `src/ccim/diagnostics.py` | gateway CLI, read-only doctor와 host launcher |
+| `src/ccim/middleware/chain.py` | PCFI, 압축, retrieve, compatibility, write guard, telemetry 체인 |
 | `src/ccim/compress/ast_compressor.py` | tree-sitter 기반 AST 코드 압축, fact manifest 생성 |
 | `src/ccim/compress/trigger.py` | 압축 후보 선택과 skip reason 진단 |
 | `src/ccim/compress/structured_outputs.py` | ToolResult dedupe와 구조화 출력 축약 |

@@ -4,9 +4,11 @@
 
 ```text
 Coding agent
-  -> FastAPI /v1/messages
+  -> FastAPI ingress
+       /v1/messages | /v1/chat/completions
+  -> Canonical MessagesRequest
   -> MiddlewareChain
-       PCFI -> Compress -> Forward/retrieve -> Write guard
+       PCFI -> Compress -> Forward/retrieve -> Compatibility -> Write guard
        -> Orphan marker scan -> Write remap -> Telemetry
   -> Upstream LLM
 
@@ -48,11 +50,11 @@ Local development
 
 | 경계 | 책임 | 주요 위치 |
 |---|---|---|
-| API | Anthropic 호환 요청 검증, 세션 식별, 응답/SSE 반환 | `src/ccim/api/`, `src/ccim/main.py` |
+| API | Anthropic/OpenAI Chat ingress 검증, canonicalize, 세션 식별, 응답/SSE 반환 | `src/ccim/api/`, `src/ccim/compatibility/`, `src/ccim/main.py` |
 | Middleware | 요청별 처리 순서와 진단 정보 관리 | `src/ccim/middleware/chain.py` |
 | 압축 | 코드 AST, 구조화 출력, 텍스트 span을 보수적으로 치환 | `src/ccim/compress/` |
 | 복구/evidence | 원문·metadata 저장, persistent fallback, retrieve·guard 판단 | `src/ccim/reversibility/` |
-| Provider | Anthropic/OpenAI 형식 변환과 upstream 호출 | `src/ccim/llm/` |
+| Provider | Anthropic/OpenAI 형식 변환, strict response 검증과 upstream 호출 | `src/ccim/llm/`, `src/ccim/compatibility/` |
 | 안전 | PCFI와 원문 확인 전 write 방지 | `src/ccim/pcfi/`, `src/ccim/middleware/chain.py` |
 | 관측 | PostgreSQL 기록, OTel, Admin UI/비교 도구 | `src/ccim/telemetry/`, `tools/admin_ui/`, `tests/compare/` |
 
@@ -61,6 +63,7 @@ Local development
 - PCFI는 신뢰되지 않은 입력을 분리·판정하는 첫 방어 계층이다.
 - 압축은 forwarding 전 수행하고, 생성한 context ID와 diagnostics를 요청 context에 남긴다.
 - Forward/retrieve 단계는 upstream tool loop 안에서 원문 요청을 해석한다.
+- Compatibility 단계는 알 수 없는 provider content와 write schema를 stable reason으로 차단한다.
 - write guard는 모델이 생성한 write tool use를 검증하므로 forward 뒤에 있다.
 - orphan scan과 write remap은 marker 유출 및 line mapping 문제를 후속 보정한다.
 - telemetry는 앞 단계의 결과를 응답 경로와 분리해 기록하되, 기능 판단에 필요한 flag를 남긴다.

@@ -1,0 +1,146 @@
+{
+  "schema_version": "1",
+  "canonical_equivalence": {
+    "anthropic": {
+      "model": "qwen2.5-coder",
+      "system": "Keep source facts exact.",
+      "max_tokens": 256,
+      "stream": false,
+      "tools": [
+        {
+          "name": "Read",
+          "description": "Read one file",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file_path"
+            ]
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "read-1",
+              "name": "Read",
+              "input": {
+                "file_path": "src/example.py"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "read-1",
+              "content": "def calculate_total(values):\n    subtotal = 0\n    for value in values:\n        normalized = int(value)\n        if normalized < 0:\n            raise ValueError(\"negative\")\n        subtotal += normalized\n    tax = subtotal * 0.1\n    result = subtotal + tax\n    audit = {\"subtotal\": subtotal, \"tax\": tax}\n    if audit[\"subtotal\"] != subtotal:\n        raise AssertionError(\"audit\")\n    rounded = round(result, 2)\n    if rounded < subtotal:\n        raise AssertionError(\"rounding\")\n    result = rounded\n    marker = \"complete\"\n    if marker != \"complete\":\n        raise AssertionError(\"marker\")\n    return result\n"
+            }
+          ]
+        }
+      ]
+    },
+    "openai": {
+      "model": "qwen2.5-coder",
+      "max_tokens": 256,
+      "stream": false,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "Read",
+            "description": "Read one file",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "file_path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_path"
+              ]
+            }
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "system",
+          "content": "Keep source facts exact."
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "read-1",
+              "type": "function",
+              "function": {
+                "name": "Read",
+                "arguments": "{\"file_path\":\"src/example.py\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "read-1",
+          "content": "def calculate_total(values):\n    subtotal = 0\n    for value in values:\n        normalized = int(value)\n        if normalized < 0:\n            raise ValueError(\"negative\")\n        subtotal += normalized\n    tax = subtotal * 0.1\n    result = subtotal + tax\n    audit = {\"subtotal\": subtotal, \"tax\": tax}\n    if audit[\"subtotal\"] != subtotal:\n        raise AssertionError(\"audit\")\n    rounded = round(result, 2)\n    if rounded < subtotal:\n        raise AssertionError(\"rounding\")\n    result = rounded\n    marker = \"complete\"\n    if marker != \"complete\":\n        raise AssertionError(\"marker\")\n    return result\n"
+        }
+      ]
+    }
+  },
+  "write_tools": [
+    {
+      "case_id": "claude-edit",
+      "name": "Edit",
+      "input": {
+        "file_path": "src/example.py",
+        "old_string": "return result",
+        "new_string": "return round(result, 2)"
+      },
+      "expected_status": "supported",
+      "expected_canonical": "edit"
+    },
+    {
+      "case_id": "openai-edit-file-alias",
+      "name": "edit_file",
+      "input": {
+        "path": "src/example.py",
+        "old_string": "return result",
+        "new_string": "return round(result, 2)"
+      },
+      "expected_status": "supported",
+      "expected_canonical": "edit"
+    },
+    {
+      "case_id": "invalid-edit-schema",
+      "name": "Edit",
+      "input": {
+        "file_path": "src/example.py",
+        "replacement": "return round(result, 2)"
+      },
+      "expected_status": "unsupported",
+      "expected_reason": "unsupported_write_schema"
+    },
+    {
+      "case_id": "unsupported-patch-schema",
+      "name": "apply_patch",
+      "input": {
+        "patch": "*** Begin Patch"
+      },
+      "expected_status": "unsupported",
+      "expected_reason": "unsupported_write_tool"
+    }
+  ]
+}

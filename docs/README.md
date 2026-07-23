@@ -9,9 +9,9 @@ CCIM은 범용 RAG나 도메인 에이전트가 아니다. 코딩 에이전트�
 1. [목표와 범위](foundation/goal-and-scope.md)와 [문제 정의](foundation/problem-definition.md)
 2. [시스템 아키텍처](architecture/system-architecture.md), [도메인 모델](architecture/domain-model.md), [요청·복구 흐름](architecture/event-and-question-flow.md)
 3. [근거 및 복구 정책](policies/rag-policy.md)
-4. [개발 워크플로](development/workflow.md), [운영 기준선과 CI 계약](development/operations-baseline.md), [운영 데이터 축적 준비 계약](development/operational-data-readiness.md), [클라우드 중립 단일 VM delivery](development/single-vm-delivery.md), [로드맵](development/roadmap.md)
+4. [개발 워크플로](development/workflow.md), [운영 기준선과 CI 계약](development/operations-baseline.md), [운영 데이터 축적 준비 계약](development/operational-data-readiness.md), [클라우드 중립 단일 VM delivery](development/single-vm-delivery.md), [호환성 행렬](development/compatibility-matrix.md), [로드맵](development/roadmap.md)
 5. [평가 계획](evaluation/eval-plan.md)과 [GPT-5 mini 일일 운영 검증](evaluation/daily-gpt5-mini-canary.md)
-6. [초기 방향 ADR](decisions/ADR-0001-project-direction.md), [대체된 AWS 단일 VM ADR](decisions/ADR-0002-single-aws-vm-cicd.md), [클라우드 중립 단일 VM ADR](decisions/ADR-0003-cloud-neutral-single-vm-delivery.md)
+6. [초기 방향 ADR](decisions/ADR-0001-project-direction.md), [대체된 AWS 단일 VM ADR](decisions/ADR-0002-single-aws-vm-cicd.md), [클라우드 중립 단일 VM ADR](decisions/ADR-0003-cloud-neutral-single-vm-delivery.md), [canonical ingress와 호환성 ADR](decisions/ADR-0004-canonical-ingress-and-compatibility.md)
 
 ## 문서 유지 규칙
 

@@ -40,10 +40,12 @@
 
 ### 4. Provider와 write tool 호환성
 
+상태: repository 구현과 deterministic fixture 검증 완료. 실제 host/provider run metadata 축적은 5단계에서 시작한다.
+
 - OpenAI-compatible provider의 실제 지원 response shape, streaming, usage, tool call 경계를 fixture matrix로 명시한다.
 - `Edit`, `MultiEdit`, `Write`와 host별 변형의 schema를 fixture로 만들고, 안전하게 해석하지 못하는 write는 차단 또는 명시적 unsupported 처리한다.
 
-완료 증거: provider/write compatibility 문서, 결정적 변환·guard regression tests.
+완료 증거: `compatibility-matrix.md`, ADR-0004, canonical ingress fixture, provider/tool/SSE/usage/error regression tests, read-only doctor와 process-scoped Claude Code launcher tests.
 
 ### 5. 실제 운영 증거와 측정 기반 정책
 

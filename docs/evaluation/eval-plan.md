@@ -13,7 +13,8 @@
 | 복구 | Redis hit, persistent fallback, warm load가 metadata와 함께 작동 | `test_reversibility.py` |
 | 안전 | retrieve 전 write, 불완전 retrieve, cross-session, version mismatch를 차단 | reversibility/middleware unit tests |
 | 입력 안전 | 신뢰되지 않은 입력과 injection pattern을 분리·기록 | `test_pcfi.py`, `fixtures/injection_corpus.py` |
-| provider 경계 | 변환, tool call, 오류, SSE 형식이 지원 범위 안에서 일관됨 | LLM/routes/translate tests |
+| provider·ingress 경계 | 두 ingress의 canonical 변환, tool call, usage, 오류, SSE 형식이 지원 범위 안에서 일관됨 | `compatibility_matrix.json`, compatibility/LLM/routes tests |
+| write schema | host alias를 canonicalize하고 불명확한 write를 실행 전에 차단 | compatibility fixture와 middleware guard tests |
 | 운영 관측 | measure/admin 경로가 feature flags와 지표를 표시 | admin measure/UI tests, compare CLI |
 | 운영 데이터 준비 | run category 분리, completeness, budget hard stop, dummy report와 artifact 비식별 | operations unit/PostgreSQL tests, `ccim.operations dry-run` |
 

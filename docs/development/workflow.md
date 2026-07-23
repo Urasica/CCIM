@@ -35,11 +35,26 @@ Windows에서는 위 순서를 `scripts/verify.ps1`로 실행할 수 있다. 실
 
 운영 데이터 계약, budget 또는 report 변경은 `tests/unit/test_operations.py`, `tests/unit/test_operations_repository.py`와 PostgreSQL migration fixture를 우선한다. Roadmap 02의 검증에서는 `python -m ccim.operations dry-run`만 사용하며 외부 provider를 호출하지 않는다.
 
+Provider, ingress, write schema 또는 launcher 변경은 다음 fixture 묶음을 우선한다.
+
+```powershell
+uv run pytest tests/unit/test_compatibility.py tests/unit/test_cli.py `
+  tests/unit/test_routes.py tests/unit/test_llm_client.py `
+  tests/unit/test_middleware_chain.py -q
+uv run ccim run --dry-run --json --session fixture -- claude -p "health check"
+```
+
+`ccim doctor --json`은 실제 Redis, PostgreSQL, migration ledger, provider model list와 port를 읽기
+전용으로 검사한다. 외부 의존성이 없는 CI에서는 mock CLI test를 사용하며 unavailable 상태를
+성공으로 대체하지 않는다.
+
 ## 수동 운영 확인
 
 - Admin UI: `uv run python tools/admin_server.py`
 - A/B measure: `uv run python tests/compare/measure.py --compare <left> <right> --since 120 --verbose`
 - 직접 압축 경로: `uv run python tests/compare/direct_test.py --session direct-check`
+- 배포 준비 상태: `uv run ccim doctor --json`
+- Claude Code 환경 확인: `uv run ccim run --dry-run --json -- claude`
 
 PowerShell에서 한글이 깨져 보이면 파일 인코딩을 변경하지 말고 먼저 콘솔 출력 인코딩을 UTF-8로 설정해 확인한다. 저장소 문서는 UTF-8로 유지한다.
 

@@ -277,3 +277,169 @@ async def test_models_fallback_uses_override(monkeypatch: Any) -> None:
 
     assert resp.status_code == 200
     assert resp.json()["data"] == [{"id": "gpt-4o-mini-override", "object": "model"}]
+
+
+async def test_openai_chat_ingress_uses_canonical_chain() -> None:
+    captured: list[RequestContext] = []
+
+    async def _chain_run(ctx: RequestContext) -> None:
+        captured.append(ctx)
+        ctx.response_json = {
+            "id": "msg-openai",
+            "type": "message",
+            "role": "assistant",
+            "model": "gpt-4.1",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 2},
+        }
+
+    app = _make_app(_chain_run)
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 128,
+        },
+        headers={"x-ccim-session": "openai-session"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["object"] == "chat.completion"
+    assert resp.json()["choices"][0]["message"]["content"] == "ok"
+    assert resp.json()["usage"]["total_tokens"] == 7
+    assert captured[0].request.messages[0].content == "hi"
+    assert captured[0].session_id == "openai-session"
+    assert (
+        captured[0].extras["feature_flags"]["compatibility_ingress"]
+        == "openai_chat_completions"
+    )
+
+
+async def test_openai_chat_stream_is_synthesized_sse() -> None:
+    app = _make_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    ) as resp:
+        text = "".join(resp.iter_text())
+
+    assert resp.status_code == 200
+    assert resp.headers["x-ccim-stream-mode"] == "synthesized_complete_sse"
+    assert '"object": "chat.completion.chunk"' in text
+    assert text.endswith("data: [DONE]\n\n")
+
+
+async def test_openai_unknown_content_is_explicit_and_recorded() -> None:
+    recorder = MagicMock()
+    app = _make_app()
+    app.state.telemetry_runtime = recorder
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4.1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "https://example.invalid"}}
+                    ],
+                }
+            ],
+        },
+        headers={"x-ccim-session": "unsupported-session"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["ccim_reason"] == "unsupported_content_block"
+    assert (
+        resp.headers["x-ccim-compatibility-reason"]
+        == "unsupported_content_block"
+    )
+    recorded_ctx = recorder.record.call_args.args[0]
+    assert recorded_ctx.pcfi_action == "compatibility_reject"
+    assert (
+        recorded_ctx.extras["feature_flags"]["compatibility_reason"]
+        == "unsupported_content_block"
+    )
+
+
+async def test_anthropic_unknown_content_is_explicit_and_recorded() -> None:
+    recorder = MagicMock()
+    app = _make_app()
+    app.state.telemetry_runtime = recorder
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "source": {"data": "omitted"}}],
+                }
+            ],
+        },
+        headers={"x-ccim-session": "anthropic-unsupported"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["reason"] == "unsupported_content_block"
+    assert (
+        resp.headers["x-ccim-compatibility-reason"]
+        == "unsupported_content_block"
+    )
+    recorded_ctx = recorder.record.call_args.args[0]
+    assert (
+        recorded_ctx.extras["feature_flags"]["compatibility_ingress"]
+        == "anthropic_messages"
+    )
+
+
+async def test_responses_api_is_explicitly_unsupported() -> None:
+    app = _make_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/v1/responses",
+        json={"model": "gpt-5-mini", "input": "hi"},
+    )
+
+    assert resp.status_code == 501
+    assert resp.json()["error"]["code"] == "CCIM_UNSUPPORTED_RESPONSES_API"
+    assert resp.headers["x-ccim-compatibility-reason"] == "unsupported_responses_api"
+
+
+async def test_launcher_token_supplies_stable_session() -> None:
+    captured: list[str] = []
+
+    async def _chain_run(ctx: RequestContext) -> None:
+        captured.append(ctx.session_id)
+        ctx.response_json = {
+            "id": "msg-token",
+            "type": "message",
+            "role": "assistant",
+            "model": "m",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    app = _make_app(_chain_run)
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/v1/messages",
+        json=_BASE_BODY,
+        headers={"authorization": "Bearer ccim-session-launch-session-1"},
+    )
+
+    assert resp.status_code == 200
+    assert captured == ["launch-session-1"]

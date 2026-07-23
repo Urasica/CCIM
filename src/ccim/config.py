@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         default="S14", alias="CCIM_PCFI_SKIP_GUARD_CATEGORIES"
     )
 
-    # ── Session tagging (측정용 — Claude Code는 커스텀 헤더 미지원이므로 env로 구분)
+    # ── Session tagging (header/launcher token이 없을 때 사용하는 fallback prefix)
     session_prefix: str = Field(default="", alias="CCIM_SESSION_PREFIX")
 
     # ── Compression

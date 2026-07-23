@@ -1,7 +1,7 @@
-"""Anthropic Messages API와 호환되는 Pydantic 모델.
+"""Middleware chain의 canonical Anthropic Messages 형태 Pydantic 모델.
 
-V1은 Anthropic 형식만, OpenAI Chat Completions는 V1.x에서 추가.
-필요한 필드만 정의 — `extra="allow"`로 모르는 필드는 통과.
+OpenAI Chat Completions ingress는 compatibility adapter에서 이 모델로
+엄격히 변환한다. canonical model은 upstream/ingress별 로직을 포함하지 않는다.
 """
 
 from __future__ import annotations
