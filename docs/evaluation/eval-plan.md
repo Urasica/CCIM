@@ -15,6 +15,7 @@
 | 입력 안전 | 신뢰되지 않은 입력과 injection pattern을 분리·기록 | `test_pcfi.py`, `fixtures/injection_corpus.py` |
 | provider 경계 | 변환, tool call, 오류, SSE 형식이 지원 범위 안에서 일관됨 | LLM/routes/translate tests |
 | 운영 관측 | measure/admin 경로가 feature flags와 지표를 표시 | admin measure/UI tests, compare CLI |
+| 운영 데이터 준비 | run category 분리, completeness, budget hard stop, dummy report와 artifact 비식별 | operations unit/PostgreSQL tests, `ccim.operations dry-run` |
 
 ## Golden case 형식
 
@@ -47,6 +48,7 @@
 - retrieve cache hit, persistent hit, reload hit/miss, guard block rate를 추적한다.
 - semantic checker 통과율, 사실 왜곡/false guard의 회귀 수, context trace coverage를 추적한다.
 - benchmark 보고서에는 run/session prefix, fixture, 기간, 원본·전송·출력 토큰을 함께 남긴다. 서로 다른 DB 상태의 결과를 같은 A/B 수치처럼 비교하지 않는다.
+- Roadmap 02 report는 항상 `dry-run` 또는 `dummy`로 표시하고 `daily-canary`와 `personal-production` category를 분리한다. 누락·incomplete는 0이나 성공으로 대체하지 않는다.
 
 ## 실행 원칙
 

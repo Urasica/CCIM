@@ -23,6 +23,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $taskUvPath run --no-sync python scripts/check_markdown_links.py
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+& $taskUvPath run --no-sync python -m ccim.operations dry-run
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 & $taskUvPath run --no-sync pytest tests/unit -q
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

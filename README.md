@@ -301,7 +301,16 @@ roadmap 01 전체 로컬 기준선:
 .\scripts\verify.ps1
 ```
 
-이 명령은 lockfile, Ruff, 문서 링크, unit, 외부 LLM 없는 mock integration, semantic golden fixture와 whitespace를 순서대로 확인합니다. PostgreSQL fixture와 Docker smoke는 GitHub Actions에서 별도 job으로 실행합니다.
+이 명령은 lockfile, Ruff, 문서 링크, 운영 데이터 mock dry-run, unit, 외부 LLM 없는 mock integration, semantic golden fixture와 whitespace를 순서대로 확인합니다. PostgreSQL fixture와 Docker smoke는 GitHub Actions에서 별도 job으로 실행합니다.
+
+roadmap 02 운영 데이터 축적 준비 dry-run:
+
+```powershell
+uv run python -m ccim.operations dry-run --json
+uv run python -m ccim.operations report --window-days 30 --json
+```
+
+이 명령은 외부 LLM이나 실제 개인 데이터를 사용하지 않습니다. run category, 성공·실패·skip·retry·incomplete, telemetry completeness, gross/retrieve/net token 계산, 예산 hard stop과 비식별 artifact 형식을 mock data로 검증합니다. 실제 daily canary와 personal-production 기록은 AWS 배포와 호환성 검증을 마친 뒤 마지막 운영 단계에서 시작합니다.
 
 Measure UI에서 prefix를 넣어 비교하고 markdown report로 export할 수 있습니다.
 CLI로는 다음처럼 확인합니다.
@@ -338,6 +347,8 @@ uv run python tests/compare/direct_test.py --session direct-check
 | `src/ccim/reversibility/interceptor.py` | `retrieve_original` 처리 |
 | `src/ccim/telemetry/logger.py` | PostgreSQL 요청 telemetry 기록 |
 | `migrations/002_request_operational_metrics.sql` | feature_flags 기반 운영 지표 view |
+| `migrations/003_operational_data_readiness.sql` | run·request observation·UTC token ledger와 운영 집계 view |
+| `src/ccim/operations/` | 운영 run 계약, budget preflight, mock dry-run, 비식별 report와 저장소 |
 | `tools/admin_server.py` | Admin UI 서버 진입점 |
 | `tools/admin_ui/` | Admin UI 정적 파일과 측정 UI |
 | `tests/compare/` | benchmark, measure, task fixture, semantic checker |

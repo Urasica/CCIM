@@ -122,6 +122,12 @@ jobs:
           mkdir -p artifacts/raw
           uv run --no-sync python -m ccim.migrations apply
           uv run --no-sync python -m ccim.migrations check --json > artifacts/migration-summary.json
+      - name: Run operational-data readiness dry-run
+        run: |
+          uv run --no-sync python -m ccim.operations dry-run \
+            --output artifacts/operational-readiness.json
+          uv run --no-sync python scripts/check_artifact_safety.py \
+            artifacts/operational-readiness.json
       - name: Run mock and infrastructure integration
         id: integration-tests
         continue-on-error: true
@@ -144,6 +150,7 @@ jobs:
           uv run --no-sync python scripts/check_artifact_safety.py \
             artifacts/integration-summary.json \
             artifacts/migration-summary.json \
+            artifacts/operational-readiness.json \
             artifacts/semantic-report.txt
       - name: Upload integration summaries
         if: always()
@@ -153,6 +160,7 @@ jobs:
           path: |
             artifacts/integration-summary.json
             artifacts/migration-summary.json
+            artifacts/operational-readiness.json
             artifacts/semantic-report.txt
           if-no-files-found: error
           retention-days: 14
@@ -196,6 +204,8 @@ jobs:
           assert ready['dependencies']['migrations']['current'] is True
           PY
       - name: Record image evidence
+        env:
+          PYTHONPATH: src
         run: |
           mkdir -p artifacts
           image_id=$(docker image inspect --format='{{.Id}}' ccim:${{ github.sha }})

@@ -6,6 +6,8 @@
 
 하루 작업은 같은 fixture를 compression off와 on으로 각각 실행하는 A/B 한 쌍이다. 무료 token을 소진하는 것이 목표가 아니라, 매일 비교 가능한 품질·절감·지연 표본을 남기는 것이 목표다.
 
+이 문서는 실제 실행 계약을 정의하지만 곧바로 데이터 수집을 허가하지 않는다. 로드맵 2단계에서는 mock provider로 schema·예산·artifact dry-run만 수행하고, 3단계에서는 동일 runner를 AWS VM에서 외부 호출 없이 검증한다. 4단계의 host/provider 호환성까지 통과한 뒤 5단계에서만 예약 canary와 실제 record 축적을 시작한다.
+
 ## 무료 일일 사용 조건
 
 이 계획은 2026-07-22 현재 계정의 Data Sharing 설정에 표시된 다음 조건을 전제로 한다.

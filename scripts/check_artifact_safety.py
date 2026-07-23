@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
+from ccim.operations.safety import parse_and_check_json
+
 FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519"}
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".p12", ".sqlite", ".db"}
-FORBIDDEN_TEXT = {
-    "openai_key": re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
-    "anthropic_key": re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}"),
-    "credential_assignment": re.compile(
-        r"(?i)(?:OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_SECRET_ACCESS_KEY)\s*[:=]\s*[^\s\"']+"
-    ),
-    "windows_user_path": re.compile(r"[A-Za-z]:\\Users\\[^\\\s]+"),
-    "runner_path": re.compile(r"/home/runner/work/[^\s\"']+"),
-}
 
 
 def main(argv: list[str]) -> int:
@@ -32,9 +24,8 @@ def main(argv: list[str]) -> int:
                 violations.append(f"{path}: forbidden artifact name")
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
-            for label, pattern in FORBIDDEN_TEXT.items():
-                if pattern.search(text):
-                    violations.append(f"{path}: {label}")
+            for violation in parse_and_check_json(text):
+                violations.append(f"{path}: {violation}")
     if violations:
         print("unsafe CI artifact:")
         for violation in violations:

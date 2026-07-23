@@ -24,6 +24,7 @@ uv run python scripts/check_markdown_links.py
 uv run pytest tests/unit -q
 uv run pytest tests/integration -m "not integration and not ollama" -q
 uv run python -m py_compile src/ccim/middleware/chain.py tools/admin_ui/html.py
+uv run python -m ccim.operations dry-run
 uv run python tests/compare/check_task2_semantics.py tests/fixtures/task2_golden
 git diff --check
 ```
@@ -31,6 +32,8 @@ git diff --check
 Windows에서는 위 순서를 `scripts/verify.ps1`로 실행할 수 있다. 실제 Redis/PostgreSQL migration fixture와 SHA image smoke는 `.github/workflows/ci.yml`의 분리된 job에서 실행한다.
 
 변경한 영역에 맞는 좁은 테스트를 먼저 실행한다. 예를 들어 middleware 변경은 `tests/unit/test_middleware_chain.py`, evidence 저장소 변경은 `tests/unit/test_reversibility.py`, Admin UI 변경은 `tests/unit/test_admin_ui_app.py`와 `tests/unit/test_admin_measure.py`를 우선한다.
+
+운영 데이터 계약, budget 또는 report 변경은 `tests/unit/test_operations.py`, `tests/unit/test_operations_repository.py`와 PostgreSQL migration fixture를 우선한다. Roadmap 02의 검증에서는 `python -m ccim.operations dry-run`만 사용하며 외부 provider를 호출하지 않는다.
 
 ## 수동 운영 확인
 

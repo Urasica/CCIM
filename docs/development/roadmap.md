@@ -16,29 +16,45 @@
 
 완료 증거: migration fixture 또는 check command, Admin 상태 테스트, telemetry 실패/flush 테스트.
 
-### 2. 단일 AWS VM CI/CD와 예산 제한 canary
+### 2. 운영 데이터 계약과 수집 준비
+
+- `synthetic-dry-run`, `daily-canary`, `personal-production` run category와 commit/config/provider/deployment metadata를 정의한다.
+- provider usage와 추정치, gross/net saving, latency, retrieve, guard, 품질과 운영 실패를 같은 run에서 연결한다.
+- 원문·prompt·절대 경로를 외부 artifact에서 제거하고 telemetry/evidence retention을 분리한다.
+- mock provider로 성공·실패·skip·retry·incomplete와 telemetry completeness 계산을 재현한다.
+- GPT-5 mini 계열의 하루 250만 무료 공유 token 조건, 210만 hard stop과 40만 안전 여유를 model 호출 없는 경계 테스트로 검증한다.
+- 실제 외부 LLM canary와 개인 작업 기록은 이 단계에서 시작하지 않는다.
+
+완료 증거: schema/migration fixture, mock dry-run summary, budget preflight 경계 테스트, category별 dummy report와 artifact safety 검사.
+
+### 3. 단일 AWS VM CI/CD
 
 - 로컬 개발, GitHub Actions CI, ECR image 게시, OIDC/Systems Manager 기반 단일 EC2 자동 배포를 연결한다.
 - pull request는 CI만 실행하고 `main` 성공 commit만 immutable digest로 배포한다.
 - migration/readiness 실패 시 직전 digest로 rollback하고 결과를 추적한다.
-- GPT-5 mini 계열의 하루 250만 무료 공유 token 한도 안에서 동일 task의 baseline/compressed A/B를 매일 실행한다.
+- canary runner와 예약 실행 경로는 mock provider와 simulated ledger로 VM 안에서 dry-run한다.
+- 외부 LLM 호출과 실제 token ledger 축적은 호환성 검증까지 완료한 뒤 5단계에서 시작한다.
 
-완료 증거: CI run, image digest, Systems Manager command ID, readiness 결과, rollback 훈련, UTC 일일 token ledger와 30일 집계.
+완료 증거: CI run, image digest, Systems Manager command ID, readiness 결과, rollback/restore 훈련, VM canary dry-run.
 
-### 3. Provider와 write tool 호환성
+### 4. Provider와 write tool 호환성
 
 - OpenAI-compatible provider의 실제 지원 response shape, streaming, usage, tool call 경계를 fixture matrix로 명시한다.
 - `Edit`, `MultiEdit`, `Write`와 host별 변형의 schema를 fixture로 만들고, 안전하게 해석하지 못하는 write는 차단 또는 명시적 unsupported 처리한다.
 
 완료 증거: provider/write compatibility 문서, 결정적 변환·guard regression tests.
 
-### 4. Evidence 운영 안정성
+### 5. 실제 운영 증거와 측정 기반 정책
 
+- 1~4단계 완료 후 synthetic daily canary와 비공유 personal-production 관측을 분리해 시작한다.
+- 첫 14일에는 active day, session, request, telemetry completeness와 semantic 품질 gate를 확인한다.
+- 30일 동안 token 절감, retrieve overhead, p50/p95 지연, 복구, guard, 실패·rollback·restore를 같은 policy cohort로 집계한다.
 - Redis/persistent store 간 reload, TTL, 삭제, 저장량, document version 변화를 Admin UI와 trace에서 명확히 보여준다.
 - 문서·로그·메일 span의 heuristic은 사실 보존 fixture를 늘리며 보수적으로 확장한다.
+- 충분한 production 표본을 확보한 뒤에만 threshold 변경을 shadow 평가와 canary를 거쳐 승격한다.
 - evidence guard를 사용하는 외부 action hook은 자동 실행 없이 draft/확인 단계까지만 설계한다.
 
-완료 증거: reload/version/cleanup fixture, trace fields, Admin UI 검사.
+완료 증거: 분리된 daily-canary/personal-production 집계, 14일 gate, 익명화된 30일 보고서, reload/version/cleanup fixture, report command와 Admin UI 검사.
 
 ## 보류 항목
 
